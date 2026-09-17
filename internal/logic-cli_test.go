@@ -15,3 +15,32 @@ limitations under the License.
 */
 
 package internal
+
+import (
+	"errors"
+	"io"
+	"testing"
+)
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	return 0, w.err
+}
+
+func TestCheckListCmdReturnsWriteError(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	expectedErr := errors.New("write failed")
+
+	cmd := newCheckListCmd(db)
+	cmd.SilenceUsage = true
+	cmd.SetOut(failingWriter{err: expectedErr})
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+	}
+}

@@ -63,7 +63,9 @@ func newCheckListCmd(db *Database) *cobra.Command {
 
 			out := cmd.OutOrStdout()
 			for _, f := range features {
-				fmt.Fprintf(out, "%-20s %-20s %s\n", f.Key, f.Category.Name, f.Description)
+				if _, err := fmt.Fprintf(out, "%-20s %-20s %s\n", f.Key, f.Category.Name, f.Description); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -157,7 +159,9 @@ func newJobsListCmd(db *Database) *cobra.Command {
 				if j.FinishedAt != nil {
 					finished = j.FinishedAt.Format(time.RFC3339)
 				}
-				fmt.Fprintf(out, "%-4d %-9s %-25s %-25s %s\n", j.ID, j.Status, j.StartedAt.Format(time.RFC3339), finished, j.Summary)
+				if _, err := fmt.Fprintf(out, "%-4d %-9s %-25s %-25s %s\n", j.ID, j.Status, j.StartedAt.Format(time.RFC3339), finished, j.Summary); err != nil {
+					return err
+				}
 			}
 			return nil
 		},
@@ -185,9 +189,13 @@ func newJobsShowCmd(db *Database) *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
-			fmt.Fprintf(out, "Job %d: %s (%s)\n", job.ID, job.Status, job.Summary)
+			if _, err := fmt.Fprintf(out, "Job %d: %s (%s)\n", job.ID, job.Status, job.Summary); err != nil {
+				return err
+			}
 			for _, r := range results {
-				fmt.Fprintf(out, "[%s] %-17s %s\n", r.Status, r.Key, r.Message)
+				if _, err := fmt.Fprintf(out, "[%s] %-17s %s\n", r.Status, r.Key, r.Message); err != nil {
+					return err
+				}
 			}
 			return nil
 		},

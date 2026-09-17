@@ -26,15 +26,21 @@ import (
 // When failOnly is true, only WARN and FAIL outcomes are printed.
 func WriteOutcomesText(w io.Writer, title string, outcomes []CheckOutcome, failOnly bool) {
 	if title != "" {
-		fmt.Fprintln(w, title)
-		fmt.Fprintln(w)
+		if _, err := fmt.Fprintln(w, title); err != nil {
+			return
+		}
+		if _, err := fmt.Fprintln(w); err != nil {
+			return
+		}
 	}
 
 	for _, o := range outcomes {
 		if failOnly && o.Status == StatusPass {
 			continue
 		}
-		fmt.Fprintf(w, "[%s] %-17s %s\n", o.Status, o.Key, o.Message)
+		if _, err := fmt.Fprintf(w, "[%s] %-17s %s\n", o.Status, o.Key, o.Message); err != nil {
+			return
+		}
 	}
 }
 
