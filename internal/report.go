@@ -24,13 +24,13 @@ import (
 
 // WriteOutcomesText renders check outcomes as a human-readable, aligned report.
 // When failOnly is true, only WARN and FAIL outcomes are printed.
-func WriteOutcomesText(w io.Writer, title string, outcomes []CheckOutcome, failOnly bool) {
+func WriteOutcomesText(w io.Writer, title string, outcomes []CheckOutcome, failOnly bool) error {
 	if title != "" {
 		if _, err := fmt.Fprintln(w, title); err != nil {
-			return
+			return err
 		}
 		if _, err := fmt.Fprintln(w); err != nil {
-			return
+			return err
 		}
 	}
 
@@ -39,9 +39,10 @@ func WriteOutcomesText(w io.Writer, title string, outcomes []CheckOutcome, failO
 			continue
 		}
 		if _, err := fmt.Fprintf(w, "[%s] %-17s %s\n", o.Status, o.Key, o.Message); err != nil {
-			return
+			return err
 		}
 	}
+	return nil
 }
 
 // WriteOutcomesJSON renders check outcomes as JSON.

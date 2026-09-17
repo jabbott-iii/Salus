@@ -122,7 +122,9 @@ func TestWriteOutcomesTextFailOnly(t *testing.T) {
 	}
 
 	var buf bytes.Buffer
-	WriteOutcomesText(&buf, "", outcomes, true)
+	if err := WriteOutcomesText(&buf, "", outcomes, true); err != nil {
+		t.Fatalf("WriteOutcomesText() error = %v", err)
+	}
 
 	out := buf.String()
 	if strings.Contains(out, "] a ") {

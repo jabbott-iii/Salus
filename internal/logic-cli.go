@@ -110,7 +110,9 @@ func newCheckRunCmd(db *Database) *cobra.Command {
 					return err
 				}
 			case !quiet:
-				WriteOutcomesText(out, "Environment Health Check", outcomes, failOnly)
+				if err := WriteOutcomesText(out, "Environment Health Check", outcomes, failOnly); err != nil {
+					return err
+				}
 			}
 
 			os.Exit(ExitCodeFor(WorstStatus(outcomes)))
