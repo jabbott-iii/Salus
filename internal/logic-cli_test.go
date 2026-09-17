@@ -15,3 +15,73 @@ limitations under the License.
 */
 
 package internal
+
+import (
+	"errors"
+	"io"
+	"strconv"
+	"testing"
+	"time"
+)
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write(p []byte) (int, error) {
+	return 0, w.err
+}
+
+func TestCheckListCmdReturnsWriteError(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	expectedErr := errors.New("write failed")
+
+	cmd := newCheckListCmd(db)
+	cmd.SilenceUsage = true
+	cmd.SetOut(failingWriter{err: expectedErr})
+	cmd.SetErr(io.Discard)
+
+	err := cmd.Execute()
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+	}
+}
+
+func TestJobsListCmdReturnsWriteError(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	_, err := RecordScan(db, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass, Duration: time.Millisecond}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	expectedErr := errors.New("write failed")
+
+	cmd := newJobsListCmd(db)
+	cmd.SilenceUsage = true
+	cmd.SetOut(failingWriter{err: expectedErr})
+	cmd.SetErr(io.Discard)
+
+	err = cmd.Execute()
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+	}
+}
+
+func TestJobsShowCmdReturnsWriteError(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	job, err := RecordScan(db, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass, Duration: time.Millisecond}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	expectedErr := errors.New("write failed")
+
+	cmd := newJobsShowCmd(db)
+	cmd.SilenceUsage = true
+	cmd.SetOut(failingWriter{err: expectedErr})
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{strconv.Itoa(int(job.ID))})
+
+	err = cmd.Execute()
+	if !errors.Is(err, expectedErr) {
+		t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+	}
+}
