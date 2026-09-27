@@ -81,6 +81,11 @@ type CheckOptions struct {
 	ServiceName string
 
 	CommandTimeout time.Duration
+
+	// Test seams for external tools; nil means exec.CommandContext(...).CombinedOutput
+	// and exec.LookPath. Tests set them so no real docker/kubectl/systemctl runs.
+	runCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
+	lookPath   func(file string) (string, error)
 }
 
 // defaultCommandTimeout applies when CheckOptions.CommandTimeout is unset (<= 0).
@@ -92,6 +97,27 @@ func (o CheckOptions) commandTimeout() time.Duration {
 		return defaultCommandTimeout
 	}
 	return o.CommandTimeout
+}
+
+// command runs an external tool with a timeout and returns its combined output.
+func (o CheckOptions) command(name string, args ...string) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), o.commandTimeout())
+	defer cancel()
+
+	if o.runCommand != nil {
+		return o.runCommand(ctx, name, args...)
+	}
+	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+}
+
+// hasTool reports whether an executable is available on PATH.
+func (o CheckOptions) hasTool(file string) bool {
+	lookPath := exec.LookPath
+	if o.lookPath != nil {
+		lookPath = o.lookPath
+	}
+	_, err := lookPath(file)
+	return err == nil
 }
 
 // thresholdStatus classifies value against warn/fail thresholds, attaching detail as the message.
@@ -153,14 +179,11 @@ func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 func checkDockerStatus(opts CheckOptions) CheckOutcome {
 	start := time.Now()
 
-	if _, err := exec.LookPath("docker"); err != nil {
+	if !opts.hasTool("docker") {
 		return CheckOutcome{Key: keyDocker, Status: StatusWarn, Message: "docker CLI not found in PATH", Duration: time.Since(start)}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.commandTimeout())
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput()
+	out, err := opts.command("docker", "info", "--format", "{{.ServerVersion}}")
 	if err != nil {
 		return CheckOutcome{Key: keyDocker, Status: StatusFail, Message: fmt.Sprintf("docker daemon unreachable: %s", firstLine(string(out), err)), Duration: time.Since(start)}
 	}
@@ -172,14 +195,11 @@ func checkDockerStatus(opts CheckOptions) CheckOutcome {
 func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
 	start := time.Now()
 
-	if _, err := exec.LookPath("kubectl"); err != nil {
+	if !opts.hasTool("kubectl") {
 		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: "kubectl CLI not found in PATH", Duration: time.Since(start)}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.commandTimeout())
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, "kubectl", "cluster-info").CombinedOutput()
+	out, err := opts.command("kubectl", "cluster-info")
 	if err != nil {
 		return CheckOutcome{Key: keyKubernetes, Status: StatusFail, Message: fmt.Sprintf("kubernetes cluster unreachable: %s", firstLine(string(out), err)), Duration: time.Since(start)}
 	}
@@ -201,15 +221,13 @@ func checkServiceUptime(opts CheckOptions) CheckOutcome {
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: "service uptime check requires systemd (Linux only)", Duration: time.Since(start)}
 	}
 
-	if _, err := exec.LookPath("systemctl"); err != nil {
+	if !opts.hasTool("systemctl") {
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: "systemctl not found in PATH", Duration: time.Since(start)}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), opts.commandTimeout())
-	defer cancel()
-
-	out, err := exec.CommandContext(ctx, "systemctl", "is-active", name).CombinedOutput()
-	state := strings.TrimSpace(string(out))
+	out, err := opts.command("systemctl", "is-active", name)
+	// Only the first line is used so messages stay single-line in reports.
+	state := firstLine(string(out), err)
 
 	switch {
 	case err == nil && state == "active":
@@ -217,9 +235,6 @@ func checkServiceUptime(opts CheckOptions) CheckOutcome {
 	case state == "activating" || state == "reloading":
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: fmt.Sprintf("service %q is %s", name, state), Duration: time.Since(start)}
 	default:
-		if state == "" {
-			state = firstLine(string(out), err)
-		}
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusFail, Message: fmt.Sprintf("service %q is not active (%s)", name, state), Duration: time.Since(start)}
 	}
 }
@@ -240,7 +255,9 @@ func checkMisconfiguration(opts CheckOptions) CheckOutcome {
 		warnings = append(warnings, "HOME environment variable is not set")
 	}
 
-	if dbPath := os.Getenv(databasePathEnvVar); dbPath != "" {
+	// On Windows, Go reports 0666 for every writable file (ACLs are not mode
+	// bits), so this POSIX permission test would always warn there.
+	if dbPath := os.Getenv(DatabasePathEnv); dbPath != "" && runtime.GOOS != "windows" {
 		if info, err := os.Stat(dbPath); err == nil {
 			if info.Mode().Perm()&0o022 != 0 {
 				warnings = append(warnings, fmt.Sprintf("%s is writable by group/other", dbPath))

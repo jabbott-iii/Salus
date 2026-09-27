@@ -17,9 +17,10 @@ limitations under the License.
 package internal
 
 import (
+	"errors"
 	"fmt"
-	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -31,6 +32,11 @@ func NewRootCmd(db *Database) *cobra.Command {
 		Use:   "salus",
 		Short: "Salus is an environment health checker",
 		Long:  "Salus verifies disk space, memory, CPU load, Docker status, Kubernetes status, service uptime, and common misconfigurations.",
+		// Cobra would print errors and usage through the output writer, which
+		// mixes them into stdout (and --json). The caller reports errors on
+		// stderr instead; see run in main.go.
+		SilenceErrors: true,
+		SilenceUsage:  true,
 	}
 
 	root.AddCommand(newCheckCmd(db))
@@ -39,10 +45,27 @@ func NewRootCmd(db *Database) *cobra.Command {
 	return root
 }
 
+// runGroup shows help for a command group and rejects unknown subcommands.
+// Without it Cobra prints help and exits 0 for a mistyped subcommand such as
+// "salus check rn", which would let a broken CI step pass.
+func runGroup(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return cmd.Help()
+	}
+	msg := fmt.Sprintf("unknown command %q for %q", args[0], cmd.CommandPath())
+	if suggestions := cmd.SuggestionsFor(args[0]); len(suggestions) > 0 {
+		msg += "; did you mean " + strings.Join(suggestions, " or ") + "?"
+	}
+	return errors.New(msg)
+}
+
 func newCheckCmd(db *Database) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Run or list environment health checks",
+		RunE:  runGroup,
+		// Cobra only defaults this for the root command's suggestions.
+		SuggestionsMinimumDistance: 2,
 	}
 
 	cmd.AddCommand(newCheckListCmd(db))
@@ -55,6 +78,7 @@ func newCheckListCmd(db *Database) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List available health checks",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			features, err := ListFeatures(db)
 			if err != nil {
@@ -86,36 +110,46 @@ func newCheckRunCmd(db *Database) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run health checks and report the results",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			opts := CheckOptions{
 				DiskPath:    diskPath,
 				ServiceName: service,
 			}
 
+			startedAt := time.Now()
 			outcomes, err := RunChecks(only, opts)
 			if err != nil {
 				return err
 			}
 
 			if !noSave {
-				if _, err := RecordScan(db, outcomes); err != nil {
+				if _, err := RecordScan(db, startedAt, outcomes); err != nil {
 					return fmt.Errorf("record scan: %w", err)
 				}
 			}
 
 			out := cmd.OutOrStdout()
 			switch {
+			case quiet:
+				// --quiet suppresses report output, including --json.
 			case jsonOutput:
 				if err := WriteOutcomesJSON(out, outcomes); err != nil {
 					return err
 				}
-			case !quiet:
+			default:
 				if err := WriteOutcomesText(out, "Environment Health Check", outcomes, failOnly); err != nil {
 					return err
 				}
 			}
 
-			os.Exit(ExitCodeFor(WorstStatus(outcomes)))
+			if code := ExitCodeFor(WorstStatus(outcomes)); code != ExitCodePass {
+				// A WARN or FAIL result is not a usage problem, so Cobra must not
+				// print the error or the usage text; main maps it to the exit code.
+				cmd.SilenceErrors = true
+				cmd.SilenceUsage = true
+				return &ExitStatusError{Code: code}
+			}
 			return nil
 		},
 	}
@@ -125,7 +159,7 @@ func newCheckRunCmd(db *Database) *cobra.Command {
 	cmd.Flags().StringVar(&diskPath, "disk-path", "/", "mount path to check for free disk space")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output results as JSON")
 	cmd.Flags().BoolVar(&failOnly, "fail-only", false, "only show WARN and FAIL results in text output")
-	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress output (still sets the exit code)")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress report output, including --json (still sets the exit code)")
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "do not persist this run to the database")
 
 	return cmd
@@ -135,6 +169,9 @@ func newJobsCmd(db *Database) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "jobs",
 		Short: "View past health check runs",
+		RunE:  runGroup,
+		// Cobra only defaults this for the root command's suggestions.
+		SuggestionsMinimumDistance: 2,
 	}
 
 	cmd.AddCommand(newJobsListCmd(db))
@@ -149,6 +186,7 @@ func newJobsListCmd(db *Database) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List recent health check runs",
+		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			jobs, err := ListScanJobs(db, limit)
 			if err != nil {

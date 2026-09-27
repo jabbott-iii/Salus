@@ -23,10 +23,15 @@ import (
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
-// databasePathEnvVar is the environment variable used to configure the sqlite database path.
-const databasePathEnvVar = "SALUS_DB_PATH"
+const (
+	// DatabasePathEnv is the environment variable that sets the sqlite database path.
+	DatabasePathEnv = "SALUS_DB_PATH"
+	// DefaultDatabasePath is used when DatabasePathEnv is unset or empty.
+	DefaultDatabasePath = "salus.db"
+)
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
 
@@ -38,10 +43,13 @@ type Database struct {
 // NewDatabase opens (or creates) the sqlite file and runs schema migrations.
 func NewDatabase(path string) (*Database, error) {
 	if path == "" {
-		path = "salus.db"
+		path = DefaultDatabasePath
 	}
 
-	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{})
+	// GORM's default logger writes to stdout (corrupting --json output) and
+	// logs "record not found" for normal lookups. Errors are returned to
+	// callers and reported by the CLI instead.
+	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
@@ -52,7 +60,8 @@ func NewDatabase(path string) (*Database, error) {
 		&ScanJob{},
 		&ScanResult{},
 	); err != nil {
-		return nil, fmt.Errorf("auto-migrate schema: %w", err)
+		db := &Database{conn: conn}
+		return nil, errors.Join(fmt.Errorf("auto-migrate schema: %w", err), db.Close())
 	}
 
 	return &Database{conn: conn}, nil
@@ -61,6 +70,19 @@ func NewDatabase(path string) (*Database, error) {
 // Conn exposes the raw gorm handle for advanced queries/transactions.
 func (d *Database) Conn() *gorm.DB {
 	return d.conn
+}
+
+// Close releases the underlying connection pool. Windows cannot delete the
+// database file while it is open, so tests and main must always call it.
+func (d *Database) Close() error {
+	sqlDB, err := d.conn.DB()
+	if err != nil {
+		return fmt.Errorf("get sql.DB: %w", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("close sqlite database: %w", err)
+	}
+	return nil
 }
 
 //-----------------------------------------------------------models and types------------------------------------------------------------------------------------------------//

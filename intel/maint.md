@@ -7,7 +7,7 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
 changes).
 
 ## 1. Purpose and scope
@@ -26,10 +26,10 @@ HTTP interface is ever added.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry point | `main.go`, `database_path.go`, `version.go` | Resolve DB path from `SALUS_DB_PATH`, open DB, seed catalog, build the root command with the build `version` (`--version`), and execute it. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`), flag parsing, exit-code mapping. |
+| Entry point | `main.go`, `database_path.go`, `version.go` | `run()` resolves the DB path from `SALUS_DB_PATH`, opens the DB (closed on return), seeds the catalog, builds the root command with the build `version` (`--version`), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
+| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`) and flag parsing. `check run` returns `*ExitStatusError` for WARN/FAIL. |
 | Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
-| Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code mapping. |
+| Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
 | Persistence | `internal/database.go`, `internal/scan-store.go`, `internal/seed.go` | GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
 | Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only), scheduled for removal because Salus is CLI-only (Q-001, `plan.md` P5-2). |
 
@@ -37,8 +37,9 @@ All application code lives in the single package
 `github.com/jabbott-iii/Salus/internal`. Dependency direction today is:
 CLI → checks, reporting, persistence. Check and report code does not call
 persistence functions or touch the database, and must stay that way. The
-only shared symbol is the `databasePathEnvVar` constant, which the
-`misconfig` check reads. See `map.md` for diagrams.
+only shared symbol is the `DatabasePathEnv` constant, which the `misconfig`
+check reads. `DatabasePathEnv` and `DefaultDatabasePath` are defined once in
+`internal/database.go` and used by `main`. See `map.md` for diagrams.
 
 ### Runtime flow
 
@@ -49,8 +50,9 @@ only shared symbol is the `databasePathEnvVar` constant, which the
    `AllCheckKeys` order (or the `--only` order).
 4. Unless `--no-save` is set, `RecordScan` persists one `ScanJob` and one
    `ScanResult` per outcome in a single transaction.
-5. Output is written as text or JSON, then the process exits with the code
-   derived from the worst status.
+5. Output is written as text or JSON (nothing with `--quiet`). A WARN or
+   FAIL result is returned as `*ExitStatusError`. `main.run` closes the
+   database and returns the exit code (0/1/2, or 3 for operational errors).
 
 ## 3. Public contracts (treat as compatibility surface)
 
@@ -60,15 +62,28 @@ authorization plus README and `history.md` updates:
 - **Command names and flags** documented in `README.md`, including the root
   `--version` flag (output `salus version <version>`, where `<version>` is
   `dev` unless set with `-ldflags "-X main.version=..."`).
-- **Exit codes of `check run`:** `0` all PASS, `1` any WARN, `2` any FAIL
-  (`ExitCodeFor`). Cobra/command errors currently also exit `1`. A distinct
-  exit code for operational errors is approved (Q-004) and planned as `3`
-  (`plan.md` P1-9). Until it lands, treat `1` as ambiguous.
+- **Exit codes:** `check run` exits `0` all PASS, `1` any WARN, `2` any FAIL
+  (`ExitCodeFor`). Every command exits `3` (`ExitCodeError`) for operational
+  errors: Cobra flag/argument errors, unknown `--only` keys, missing jobs, and
+  database failures (Q-004). `check run` returns `*ExitStatusError` for WARN
+  and FAIL, and `main.run` maps any returned error with `ExitCode`. Only
+  `main` calls `os.Exit`.
 - **Check keys:** `disk-space`, `memory`, `cpu-load`, `docker-status`,
   `kubernetes-status`, `service-uptime`, `misconfig`. Keys are stored in the
   database and accepted by `--only`; never rename a key without a migration.
 - **JSON output shape:** an array of objects with `key`, `status`, `message`,
   and `duration_ns` (nanoseconds, from `time.Duration`).
+- **`--quiet`** suppresses `check run` report output, including `--json`, and
+  still sets the exit code.
+- **Output streams:** stdout carries only command output (reports, JSON, help,
+  version). Errors go to stderr as `Error: <message>` followed by
+  `Run '<command> --help' for usage.`. The root command sets `SilenceErrors`
+  and `SilenceUsage`, and `main.run` prints the error. Cobra must never print
+  errors or usage itself, because it routes them through the output writer.
+- **Unknown input is an error:** group commands (`check`, `jobs`) use
+  `runGroup`, which rejects unknown subcommands (with suggestions) instead of
+  printing help and exiting 0. Leaf commands declare `Args` (`cobra.NoArgs`,
+  `cobra.ExactArgs(1)`).
 - **Environment variable:** `SALUS_DB_PATH` (default `salus.db` in the current
   working directory). The default is approved to move to a per-user data
   directory (Q-002, `plan.md` P1-10). `SALUS_DB_PATH` will keep overriding it.
@@ -102,10 +117,14 @@ authorization plus README and `history.md` updates:
 - Use `StatusWarn` when a check cannot run on this host (tool missing,
   unsupported OS) and `StatusFail` when the thing being checked is unhealthy
   or unreachable.
-- External commands go through `exec.CommandContext` with
-  `opts.commandTimeout()` (default 3s), with arguments passed separately and
-  no shell. Validate any user-supplied argument before passing it (see
-  `SEC-001` in `cybersec.md`).
+- External tools are run only through `opts.hasTool` and `opts.command`,
+  which wrap `exec.LookPath` and `exec.CommandContext` with
+  `opts.commandTimeout()` (default 3s). Arguments are passed separately with
+  no shell. Tests replace them through the unexported `lookPath` and
+  `runCommand` fields of `CheckOptions` (see `fakeToolOptions` in
+  `internal/checks_test.go`). Validate any user-supplied argument before
+  passing it (see `SEC-001` in `cybersec.md`).
+- Outcome messages are a single line. Use `firstLine` on tool output.
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
   registry references.
@@ -133,8 +152,16 @@ authorization plus README and `history.md` updates:
   `AutoMigrate` only adds; it does not drop or rename columns. Any destructive
   change needs an explicit migration plan recorded in `plan.md` first.
 - Multi-row writes belong in a single `Transaction`. Queries inside a
-  transaction must use the transaction handle (`tx`), not `db.Conn()`
-  (current deviation tracked in `plan.md`).
+  transaction must use the transaction handle (`tx`), not `db.Conn()`.
+- `RecordScan` takes the time the checks started, so `ScanJob.StartedAt` and
+  `FinishedAt` bracket the actual run.
+- GORM's logger is set to `logger.Silent` in `NewDatabase`. The default logger
+  writes to stdout (corrupting `--json`) and logs normal "record not found"
+  lookups. Database errors are returned and reported by the CLI.
+- Every `NewDatabase` must be paired with `Close`: `main.run` defers it, and
+  `newTestDatabase` registers it with `t.Cleanup`. Windows cannot delete an
+  open SQLite file, and `t.TempDir` cleanup fails if the handle stays open
+  (this failed the Windows CI job on 2026-09-27).
 - Tests use a file-backed database in `t.TempDir()` (`newTestDatabase`,
   `newSeededTestDatabase`); do not use `:memory:`, because each pooled
   connection would see a different database.
@@ -165,13 +192,16 @@ authorization plus README and `history.md` updates:
   the other targets with `GOOS=darwin golangci-lint run ./...` and
   `GOOS=windows golangci-lint run ./...` (CGO is off by default when cross
   targeting, which is enough for linting).
-- New tests must be deterministic and must not depend on Docker, Kubernetes,
-  systemd, or specific host resource levels. Existing
-  `TestRunChecksDefaultsToAllChecks` executes real checks and only asserts on
-  keys; do not extend that pattern.
-- Commands should be testable through `Execute()` with injected writers. The
-  `os.Exit` call inside `check run` currently prevents that for `check run`
-  (tracked in `plan.md`).
+- Tests must be deterministic and must not execute Docker, Kubernetes, or
+  systemd tools, or depend on host resource levels. Use `fakeToolOptions` for
+  external tools, and fixture data with the `parse*` functions for `/proc`
+  contents (`internal/health-resources_linux_test.go`).
+- Tests that read environment-dependent checks (`misconfig`) call
+  `isolateMisconfigEnv`. OS-specific expectations use `runtime.GOOS` with
+  `t.Skip`, never silent passes.
+- Commands are tested through `Execute()` with injected writers and
+  arguments. The whole CLI, including exit codes, is tested through
+  `main.run`.
 
 ## 7. CI/CD expectations
 

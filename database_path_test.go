@@ -20,11 +20,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/jabbott-iii/Salus/internal"
 )
 
 func TestDatabasePathFromEnvUsesConfiguredPath(t *testing.T) {
 	want := filepath.Join(t.TempDir(), "tasks.db")
-	t.Setenv(databasePathEnv, want)
+	t.Setenv(internal.DatabasePathEnv, want)
 
 	if got := databasePathFromEnv(); got != want {
 		t.Fatalf("databasePathFromEnv() = %q, want %q", got, want)
@@ -32,19 +34,19 @@ func TestDatabasePathFromEnvUsesConfiguredPath(t *testing.T) {
 }
 
 func TestDatabasePathFromEnvUsesDefaultWhenUnset(t *testing.T) {
-	previous, wasSet := os.LookupEnv(databasePathEnv)
-	if err := os.Unsetenv(databasePathEnv); err != nil {
-		t.Fatalf("unset %s: %v", databasePathEnv, err)
+	previous, wasSet := os.LookupEnv(internal.DatabasePathEnv)
+	if err := os.Unsetenv(internal.DatabasePathEnv); err != nil {
+		t.Fatalf("unset %s: %v", internal.DatabasePathEnv, err)
 	}
 	t.Cleanup(func() {
 		if wasSet {
-			_ = os.Setenv(databasePathEnv, previous)
+			_ = os.Setenv(internal.DatabasePathEnv, previous)
 			return
 		}
-		_ = os.Unsetenv(databasePathEnv)
+		_ = os.Unsetenv(internal.DatabasePathEnv)
 	})
 
-	if got := databasePathFromEnv(); got != defaultDatabasePath {
-		t.Fatalf("databasePathFromEnv() = %q, want %q", got, defaultDatabasePath)
+	if got := databasePathFromEnv(); got != internal.DefaultDatabasePath {
+		t.Fatalf("databasePathFromEnv() = %q, want %q", got, internal.DefaultDatabasePath)
 	}
 }

@@ -16,16 +16,15 @@ limitations under the License.
 
 package main
 
-import "os"
+import (
+	"os"
 
-const (
-	databasePathEnv     = "SALUS_DB_PATH"
-	defaultDatabasePath = "salus.db"
+	"github.com/jabbott-iii/Salus/internal"
 )
 
 func databasePathFromEnv() string {
-	if path := os.Getenv(databasePathEnv); path != "" {
+	if path := os.Getenv(internal.DatabasePathEnv); path != "" {
 		return path
 	}
-	return defaultDatabasePath
+	return internal.DefaultDatabasePath
 }

@@ -28,6 +28,12 @@ func newTestDatabase(t *testing.T) *Database {
 	if err != nil {
 		t.Fatalf("NewDatabase() error = %v", err)
 	}
+	// Registered after t.TempDir, so it runs first: Windows cannot remove an open file.
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
 	return db
 }
 

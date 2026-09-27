@@ -33,10 +33,10 @@ func ListFeatures(db *Database) ([]Feature, error) {
 	return features, nil
 }
 
-// featureByKey looks up a Feature by its check key.
-func featureByKey(db *Database, key string) (Feature, error) {
+// featureByKey looks up a Feature by its check key using conn, which may be a transaction.
+func featureByKey(conn *gorm.DB, key string) (Feature, error) {
 	var feature Feature
-	err := db.Conn().Where(Feature{Key: key}).First(&feature).Error
+	err := conn.Where(Feature{Key: key}).First(&feature).Error
 	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return Feature{}, fmt.Errorf("feature %q: %w", key, ErrNotFound)
 	}
@@ -47,10 +47,13 @@ func featureByKey(db *Database, key string) (Feature, error) {
 }
 
 // RecordScan persists a ScanJob and its ScanResults for the given check outcomes.
-func RecordScan(db *Database, outcomes []CheckOutcome) (ScanJob, error) {
-	now := time.Now()
+// startedAt is when the checks began running; a zero value means now.
+func RecordScan(db *Database, startedAt time.Time, outcomes []CheckOutcome) (ScanJob, error) {
+	if startedAt.IsZero() {
+		startedAt = time.Now()
+	}
 	job := ScanJob{
-		StartedAt: now,
+		StartedAt: startedAt,
 		Status:    "running",
 	}
 
@@ -61,7 +64,7 @@ func RecordScan(db *Database, outcomes []CheckOutcome) (ScanJob, error) {
 
 		pass, warn, fail := 0, 0, 0
 		for _, outcome := range outcomes {
-			feature, err := featureByKey(db, outcome.Key)
+			feature, err := featureByKey(tx, outcome.Key)
 			if err != nil {
 				return err
 			}

@@ -75,7 +75,12 @@ func readMeminfo() (meminfo, error) {
 	if err != nil {
 		return meminfo{}, fmt.Errorf("read /proc/meminfo: %w", err)
 	}
+	return parseMeminfo(data), nil
+}
 
+// parseMeminfo extracts the fields used by the memory check from /proc/meminfo
+// contents. Missing or malformed lines leave the corresponding field at zero.
+func parseMeminfo(data []byte) meminfo {
 	values := map[string]uint64{}
 	for _, line := range strings.Split(string(data), "\n") {
 		parts := strings.Fields(line)
@@ -95,7 +100,7 @@ func readMeminfo() (meminfo, error) {
 		availableKB: values["MemAvailable"],
 		swapTotalKB: values["SwapTotal"],
 		swapFreeKB:  values["SwapFree"],
-	}, nil
+	}
 }
 
 func checkMemory(opts CheckOptions) CheckOutcome {
@@ -121,6 +126,11 @@ func readLoadAverage() (float64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read /proc/loadavg: %w", err)
 	}
+	return parseLoadAverage(data)
+}
+
+// parseLoadAverage returns the 1-minute load average from /proc/loadavg contents.
+func parseLoadAverage(data []byte) (float64, error) {
 	fields := strings.Fields(string(data))
 	if len(fields) == 0 {
 		return 0, fmt.Errorf("unexpected /proc/loadavg contents")
@@ -156,6 +166,11 @@ func readSystemUptime() (time.Duration, error) {
 	if err != nil {
 		return 0, fmt.Errorf("read /proc/uptime: %w", err)
 	}
+	return parseUptime(data)
+}
+
+// parseUptime returns the system uptime from /proc/uptime contents.
+func parseUptime(data []byte) (time.Duration, error) {
 	fields := strings.Fields(string(data))
 	if len(fields) == 0 {
 		return 0, fmt.Errorf("unexpected /proc/uptime contents")

@@ -3,30 +3,33 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
 changes).
 
 ## Directory structure
 
 ```text
 Salus/
-├── main.go                     Entry point: open DB, seed catalog, run Cobra root
-├── database_path.go            SALUS_DB_PATH resolution (default "salus.db")
+├── main.go                     main() → run(): open/close DB, seed catalog, run Cobra root, map exit code
+├── main_test.go                End-to-end exit codes and persistence through run()
+├── database_path.go            SALUS_DB_PATH resolution (constants live in internal/database.go)
 ├── database_path_test.go
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
 │   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show
-│   ├── logic-cli_test.go       Command write-error propagation tests
+│   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence
 │   ├── health.go               Check keys, options, thresholdStatus, registry, RunChecks,
 │   │                           docker / kubernetes / service-uptime / misconfig checks
 │   ├── health-thresholds.go    Threshold defaults + accessors (//go:build linux until P3-7)
 │   ├── health-resources_linux.go   disk (statfs), memory (/proc/meminfo),
 │   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
 │   ├── health-resources_other.go   Non-Linux stubs returning WARN
-│   ├── health_test.go
-│   ├── report.go               Text/JSON output, WorstStatus, ExitCodeFor
-│   ├── database.go             GORM models, NewDatabase + AutoMigrate, ErrNotFound
+│   ├── health_test.go          Thresholds, RunChecks, report and exit-code helpers
+│   ├── checks_test.go          Docker/kubectl/systemctl/misconfig checks with fake tools (fakeToolOptions)
+│   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL
+│   ├── report.go               Text/JSON output, WorstStatus, exit codes (ExitCodeFor, ExitStatusError, ExitCode)
+│   ├── database.go             GORM models, NewDatabase + AutoMigrate, Close, ErrNotFound, DB path constants
 │   ├── database_test.go
 │   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
 │   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob
@@ -104,11 +107,11 @@ sequenceDiagram
     end
     C-->>CLI: []CheckOutcome
     alt without --no-save
-        CLI->>S: outcomes
+        CLI->>S: startedAt, outcomes
         S->>DB: one transaction: insert ScanJob, N × ScanResult, mark completed
     end
     CLI-->>U: text or JSON report
-    CLI-->>U: os.Exit(0 | 1 | 2)
+    CLI-->>U: nil or *ExitStatusError → main.run returns exit 0 | 1 | 2 (3 on errors)
 ```
 
 ## Data model

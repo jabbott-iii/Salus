@@ -57,12 +57,16 @@ Flags for `check run`:
 - `--disk-path` — mount path to check for free disk space (default `/`)
 - `--json` — output results as JSON
 - `--fail-only` — only show WARN and FAIL results in text output
-- `--quiet` — suppress output (still sets the exit code)
+- `--quiet` — suppress report output, including `--json` (still sets the exit code)
 - `--no-save` — do not persist this run to the database
 
 `check run` exits with code `0` when every check passes, `1` if any check
 reports WARN, and `2` if any check reports FAIL — making it suitable for use
-in scripts and CI pipelines.
+in scripts and CI pipelines. Any command exits with code `3` when Salus cannot
+complete it: invalid flags or arguments (including an unknown command or
+subcommand), an unknown check name in `--only`, a job that does not exist, or
+a database error. Errors are written to stderr, so stdout carries only command
+output (for example, clean JSON with `--json`).
 
 ### jobs
 

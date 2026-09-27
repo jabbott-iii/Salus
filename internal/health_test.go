@@ -18,6 +18,8 @@ package internal
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -46,7 +48,9 @@ func TestThresholdStatus(t *testing.T) {
 }
 
 func TestRunChecksDefaultsToAllChecks(t *testing.T) {
-	outcomes, err := RunChecks(nil, CheckOptions{})
+	// No external tools are "installed", so docker/kubectl are never executed.
+	opts, calls := fakeToolOptions(t, nil, nil)
+	outcomes, err := RunChecks(nil, opts)
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -57,6 +61,9 @@ func TestRunChecksDefaultsToAllChecks(t *testing.T) {
 		if outcome.Key != AllCheckKeys[i] {
 			t.Errorf("outcomes[%d].Key = %q, want %q", i, outcome.Key, AllCheckKeys[i])
 		}
+	}
+	if len(*calls) != 0 {
+		t.Errorf("RunChecks() executed external commands %q, want none", *calls)
 	}
 }
 
@@ -92,6 +99,28 @@ func TestWorstStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := WorstStatus(tt.outcomes); got != tt.want {
 				t.Errorf("WorstStatus() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExitCode(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want int
+	}{
+		{name: "success", err: nil, want: ExitCodePass},
+		{name: "warn status", err: &ExitStatusError{Code: ExitCodeWarn}, want: ExitCodeWarn},
+		{name: "fail status", err: &ExitStatusError{Code: ExitCodeFail}, want: ExitCodeFail},
+		{name: "wrapped status", err: fmt.Errorf("run: %w", &ExitStatusError{Code: ExitCodeFail}), want: ExitCodeFail},
+		{name: "operational error", err: errors.New("unknown check"), want: ExitCodeError},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ExitCode(tt.err); got != tt.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", tt.err, got, tt.want)
 			}
 		})
 	}

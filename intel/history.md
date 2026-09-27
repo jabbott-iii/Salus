@@ -110,3 +110,46 @@ reconstructed from commit messages and diffs, not first-hand records.
   they were dead code on other targets. The affected code and the
   golangci-lint version (v2.13.2) both predate Phase 0. Earlier CI runs were
   not inspected. Uncommitted at the time of writing.
+
+## 2026-09-27: M2 (testable core): exit codes, DB close, test seams, Windows CI fix
+
+- Change:
+  - `check run` no longer calls `os.Exit`. It returns `*ExitStatusError` for
+    WARN/FAIL, and `main.run` maps the result to the exit code: 0/1/2, and
+    the new `3` for operational errors (invalid flags or arguments, unknown
+    check, missing job, database failure).
+  - Added `Database.Close`. `main.run` defers it, and test databases close in
+    `t.Cleanup`.
+  - `RecordScan` now takes the checks' start time and looks up features
+    inside the transaction.
+  - `SALUS_DB_PATH` and the default path are defined once
+    (`internal.DatabasePathEnv`, `internal.DefaultDatabasePath`).
+  - `misconfig` skips the POSIX permission test on Windows.
+  - `--quiet` suppresses all output, including `--json`.
+  - `service-uptime` messages are single-line.
+  - Errors go only to stderr (`Error: …` plus a `--help` hint), and Cobra's
+    own error and usage printing is silenced.
+  - `check` and `jobs` reject unknown subcommands (previously help and exit
+    0). Leaf commands reject extra arguments.
+  - GORM's logger is silenced (it wrote "record not found" lines to stdout).
+  - Added test seams for external tools (`lookPath`/`runCommand` on
+    `CheckOptions`) and `/proc` parse functions, with tests: fake-tool check
+    tests, parser fixtures, `check run` and group-command tests, and
+    end-to-end exit codes through `main.run`. `internal` coverage went from
+    66% to 87.7%.
+- Files: `main.go`, `main_test.go`, `database_path.go`,
+  `database_path_test.go`, `internal/database.go`,
+  `internal/database_test.go`, `internal/health.go`,
+  `internal/health-resources_linux.go`, `internal/health_test.go`,
+  `internal/checks_test.go`, `internal/health-resources_linux_test.go`,
+  `internal/logic-cli.go`, `internal/logic-cli_test.go`, `internal/report.go`,
+  `internal/scan-store.go`, `internal/scan-store_test.go`, `README.md`,
+  `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md`,
+  `intel/cybersec.md`
+- Reason / reference: Plan milestone M2 (P1-1 to P1-9, plus P1-11). An
+  independent review caught a regression before commit (usage text on stdout
+  once `run` set the output writer), fixed under P1-11. CI run 36343455341 on
+  `4995446` failed on Windows because the tests never closed the SQLite file,
+  so `t.TempDir` cleanup could not delete it. Exit code `3` is a
+  maintainer-approved change to the public exit-code contract (Q-004).
+  Uncommitted at the time of writing.

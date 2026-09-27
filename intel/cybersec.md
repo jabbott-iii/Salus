@@ -5,7 +5,7 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
 changes).
 
 ## Threat model summary
@@ -75,11 +75,12 @@ comment, and the current Code Scanning alert state on GitHub.
   character set, rejecting empty values and values that start with `-`. Also
   pass `--` before the unit name (`systemctl is-active -- <name>`). Return
   `StatusFail` with a clear message for invalid names.
-- **Validation:** Unit tests (with an injectable command runner) show that
+- **Validation:** Unit tests (using `fakeToolOptions` in
+  `internal/checks_test.go`, available since 2026-09-27) show that
   `--host=x`, `-H`, and an empty string are rejected without executing
   `systemctl`, and that `nginx`, `nginx.service`, and `getty@tty1.service` are
-  accepted. The gosec G204 finding for this call site is reviewed and
-  documented.
+  accepted. The gosec G204 finding for the command wrapper
+  (`CheckOptions.command`) is reviewed and documented.
 - **Resolution:** None yet.
 
 ### SEC-002: Container image runs as root and base images are not digest-pinned
@@ -130,6 +131,10 @@ comment, and the current Code Scanning alert state on GitHub.
   include cluster endpoints and host names. The `misconfig` check inspects
   permissions only when `SALUS_DB_PATH` is set, and flags only group/other
   write access, not read access. Persisted messages are not length-bounded.
+  On Windows the POSIX mode check is skipped (since 2026-09-27, P1-5), because
+  Go reports `0666` for every writable file there and the check only produced
+  false positives. Windows ACLs are not inspected. This is not a regression:
+  the Windows check never produced a meaningful signal.
 - **Required remediation:** Create the database file with mode `0600` before
   opening it with GORM, and its parent directory with `0700` when Salus
   creates it. Apply the `misconfig` permission check to the effective

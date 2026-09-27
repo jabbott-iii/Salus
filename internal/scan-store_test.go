@@ -40,7 +40,7 @@ func TestRecordScanPersistsJobAndResults(t *testing.T) {
 		{Key: keyMemory, Status: StatusWarn, Message: "getting full", Duration: 10 * time.Millisecond},
 	}
 
-	job, err := RecordScan(db, outcomes)
+	job, err := RecordScan(db, time.Time{}, outcomes)
 	if err != nil {
 		t.Fatalf("RecordScan() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestRecordScanUnknownFeatureFails(t *testing.T) {
 	db := newSeededTestDatabase(t)
 
 	outcomes := []CheckOutcome{{Key: "not-a-real-check", Status: StatusPass}}
-	if _, err := RecordScan(db, outcomes); err == nil {
+	if _, err := RecordScan(db, time.Time{}, outcomes); err == nil {
 		t.Fatal("RecordScan() expected error for unknown feature key, got nil")
 	}
 }
@@ -89,11 +89,11 @@ func TestGetScanJobNotFound(t *testing.T) {
 func TestListScanJobsOrdersNewestFirst(t *testing.T) {
 	db := newSeededTestDatabase(t)
 
-	first, err := RecordScan(db, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
+	first, err := RecordScan(db, time.Time{}, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
 	if err != nil {
 		t.Fatalf("RecordScan() error = %v", err)
 	}
-	second, err := RecordScan(db, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
+	second, err := RecordScan(db, time.Time{}, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
 	if err != nil {
 		t.Fatalf("RecordScan() error = %v", err)
 	}

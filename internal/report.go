@@ -18,6 +18,7 @@ package internal
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -67,15 +68,48 @@ func WorstStatus(outcomes []CheckOutcome) CheckStatus {
 	return worst
 }
 
+// Process exit codes. ExitCodeError covers anything that prevents a complete
+// run: invalid flags or arguments, unknown check keys, and database failures.
+const (
+	ExitCodePass  = 0
+	ExitCodeWarn  = 1
+	ExitCodeFail  = 2
+	ExitCodeError = 3
+)
+
 // ExitCodeFor maps a worst-case status to a process exit code:
 // 0 for PASS, 1 for WARN, and 2 for FAIL.
 func ExitCodeFor(status CheckStatus) int {
 	switch status {
 	case StatusFail:
-		return 2
+		return ExitCodeFail
 	case StatusWarn:
-		return 1
+		return ExitCodeWarn
 	default:
-		return 0
+		return ExitCodePass
 	}
+}
+
+// ExitStatusError reports a completed check run whose worst status maps to a
+// non-zero exit code. It is returned from a command so that the exit code
+// reaches main without os.Exit inside the command; it is not an operational
+// error.
+type ExitStatusError struct {
+	Code int
+}
+
+func (e *ExitStatusError) Error() string {
+	return fmt.Sprintf("health checks finished with exit status %d", e.Code)
+}
+
+// ExitCode maps the error returned by the root command to a process exit code.
+func ExitCode(err error) int {
+	if err == nil {
+		return ExitCodePass
+	}
+	var status *ExitStatusError
+	if errors.As(err, &status) {
+		return status.Code
+	}
+	return ExitCodeError
 }

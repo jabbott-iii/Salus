@@ -3,8 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-27 (against commit `460a24b`, plus the uncommitted
-Phase 0 changes recorded in `history.md`).
+Last reviewed: 2026-09-27 (against commit `4995446`, plus the uncommitted
+M2 changes recorded in `history.md`).
 
 ## Engineering notes
 
@@ -44,30 +44,29 @@ renaming: native runners per OS, pinned llvm-mingw for windows/arm64, and
 static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
 
 ### Behavior worth knowing
-- **Exit code 1 means two things.** `check run` exits `1` for WARN, and `main`
-  also exits `1` for any Cobra error (unknown `--only` key, DB failure,
-  bad flag). Scripts cannot tell "warning" from "Salus failed to run."
-- **`os.Exit` inside `check run`.** The command exits from within `RunE`, which
-  skips deferred cleanup and prevents `check run` from being tested through
-  `cmd.Execute()`. The DB handle is never closed explicitly.
-- **Job timestamps.** `RecordScan` sets `StartedAt` after all checks have
-  finished, so `StartedAt` and `FinishedAt` are nearly identical and do not
-  reflect check duration. The `running` and `failed` job statuses are never
-  visible: the job is written and completed in one transaction, and a
-  failed transaction leaves no row.
-- **Read outside the transaction.** `RecordScan` calls `featureByKey(db, ...)`
-  with the outer handle inside `Transaction`. It works with SQLite's default
-  locking (readers are allowed while the writer holds a RESERVED lock), but
-  would deadlock if the pool were limited to one connection, and it reads
-  outside the transaction's snapshot.
+- **Exit code 1 meant two things.** `check run` exited `1` for WARN, and
+  `main` also exited `1` for any Cobra error. *Resolved 2026-09-27 (P1-9):*
+  operational errors now exit `3`.
+- **`os.Exit` inside `check run`, and the DB was never closed.** *Resolved
+  2026-09-27 (P1-1, P1-4):* the command returns `*ExitStatusError`, and
+  `main.run` closes the database and maps the exit code. The unclosed handle
+  was what failed every database test on Windows (`t.TempDir` cleanup could
+  not delete the open `salus_test.db`; CI run 36343455341).
+- **Job timestamps.** *Resolved 2026-09-27 (P1-2):* `StartedAt` is now the
+  time the checks began. Still true: the `running` and `failed` job statuses
+  are never visible, because the job is written and completed in one
+  transaction and a failed transaction leaves no row.
+- **Read outside the transaction.** *Resolved 2026-09-27 (P1-2):*
+  `featureByKey` now uses the transaction handle.
 - **DB is opened for every command,** including `--help`, `--version`,
   `check list`, and `check run --no-save`, so `salus.db` is created in the current directory
   even when nothing is persisted.
-- **`--quiet` with `--json`** still prints JSON, because JSON takes precedence
-  in the `switch`.
-- **Duplicated constants.** `SALUS_DB_PATH` and the default `salus.db` are
-  defined in both `database_path.go` (package `main`) and
-  `internal/database.go`, which invites drift.
+- **`--quiet` with `--json`** printed JSON. *Resolved 2026-09-27 (P1-6):*
+  `--quiet` wins and suppresses report output. This was chosen over making the
+  flags mutually exclusive, which would have turned the combination into an
+  error.
+- **Duplicated constants.** *Resolved 2026-09-27 (P1-3):* `DatabasePathEnv`
+  and `DefaultDatabasePath` are defined once in `internal/database.go`.
 - **Non-Linux results.** Disk, memory, and CPU checks return `WARN` on macOS
   and Windows, so `check run` exits `1` there with default options.
 - **Windows false positive in `misconfig`.** On Windows, Go's `FileMode`
@@ -75,9 +74,12 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   (`os/types_windows.go`), so the "writable by group/other" test fires for
   every existing database whenever `SALUS_DB_PATH` is set. This is inferred
   from the Go source and has not been observed on a Windows host.
-- **Multi-line messages.** In the failure branch, `service-uptime` embeds the
-  whole trimmed combined stdout/stderr of `systemctl`, not just the first
-  line, so messages can span several lines and break the aligned text report.
+  *Resolved 2026-09-27 (P1-5):* the POSIX permission test is skipped on
+  Windows. Windows ACLs are not checked (see SEC-004).
+- **Multi-line messages.** *Resolved 2026-09-27 (P1-7):* `service-uptime` uses
+  only the first line of `systemctl` output. Still open: on success,
+  `docker-status` embeds the full combined output of `docker info`, so stderr
+  warnings could make that message multi-line.
 - **Running inside containers.** `/proc/meminfo` and `/proc/loadavg` report
   host-wide values, not cgroup limits, and `disk-space` measures the
   container filesystem unless a host path is mounted and passed with
@@ -88,9 +90,26 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
 - **Only reachability is checked for Docker.** The "Container Runtime"
   category description in `seed.go` mentions container health, but
   `docker-status` checks only daemon reachability.
-- **Test depending on the host.** `TestRunChecksDefaultsToAllChecks` runs real
-  checks, including `docker`, `kubectl`, and `systemctl` with 3s timeouts
-  when they are installed. It asserts only on keys and order.
+- **Test depending on the host.** *Resolved 2026-09-27 (P1-8):* external tools
+  are faked in tests (`fakeToolOptions`), and no test runs `docker`,
+  `kubectl`, or `systemctl`. On Linux, `TestRunChecksDefaultsToAllChecks`
+  still reads the real `statfs("/")`, `/proc/meminfo`, `/proc/loadavg`, and
+  `/proc/uptime` through `RunChecks`, but only asserts on keys.
+- **Runtime errors printed usage text.** Cobra printed the full usage after
+  any error. Once `main.run` gave Cobra the stdout writer, that usage (and the
+  error) went to stdout, which would have corrupted `--json` output; an
+  independent review caught this before commit. *Resolved 2026-09-27 (P1-11):*
+  Cobra's printing is silenced, and `main.run` writes `Error: …` plus a
+  `--help` hint to stderr.
+- **Mistyped subcommands exited 0.** `salus check rn` printed help and exited
+  `0`, because Cobra treats extra arguments to a non-runnable group command as
+  a help request. Leaf commands also silently ignored extra arguments.
+  *Resolved 2026-09-27 (P1-11):* `runGroup` rejects unknown subcommands with
+  exit `3`, and leaf commands declare `Args`.
+- **GORM logged to stdout.** `jobs show <missing id>` printed GORM's
+  default logger line (source path, SQL, colors) to stdout, and slow-query
+  warnings could corrupt `--json`. *Resolved 2026-09-27 (P1-11):* the GORM
+  logger is silent.
 
 ### Documentation drift observed
 - The README install section referred to raw binaries named
