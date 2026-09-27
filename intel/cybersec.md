@@ -5,7 +5,8 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against commit `7235211`).
+Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+changes).
 
 ## Threat model summary
 
@@ -36,6 +37,9 @@ Last reviewed: 2026-09-27 (against commit `7235211`).
 7. Verify checksums for any toolchain or binary downloaded in CI.
 8. Do not disable or weaken CodeQL, gosec, `go vet`, `golangci-lint`, or tests
    to make a build pass.
+9. In workflows, pass values derived from refs, tags, or other user-controlled
+   inputs into `run:` scripts through `env:` variables, not inline `${{ }}`
+   interpolation. The release smoke step's version check follows this rule.
 
 ## Existing controls observed
 
@@ -87,7 +91,8 @@ comment, and the current Code Scanning alert state on GitHub.
   compromised or misused container has root-equivalent control of the host.
   `golang:1.26-alpine` and `alpine:3.22` are referenced by mutable tags, so
   builds are not reproducible and can silently pick up changed images.
-  `docker.yml` also contains a comment that assumes a non-root user.
+  (A `docker.yml` comment that wrongly assumed a non-root user was corrected
+  on 2026-09-27 to point at this item.)
 - **Required remediation:** Add a dedicated non-root user and group in the
   runtime stage, give that user ownership of `/app/data`, and set `USER`. Pin
   both base images by `@sha256:` digest, with tags kept as comments, and keep
@@ -129,8 +134,8 @@ comment, and the current Code Scanning alert state on GitHub.
   opening it with GORM, and its parent directory with `0700` when Salus
   creates it. Apply the `misconfig` permission check to the effective
   database path, including the default. Bound the length of persisted
-  `Message` values. The decision on the default location is tracked as Q-002
-  in `notes.md`.
+  `Message` values. The default location moves to a per-user data directory
+  (Q-002, decided 2026-09-27; implemented under `plan.md` P1-10).
 - **Validation:** A unit test on Unix asserts that a newly created database
   has mode `0600`. A `misconfig` test with a `0644` database file returns
   `WARN`. A test asserts truncation of messages longer than the bound.
@@ -143,16 +148,18 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Risk:** Low. Nothing runs `govulncheck` against the module graph. SHA-pinned
   actions, Go modules, and Docker base images have no automated update path,
   so pins go stale and known-vulnerable versions can persist. gosec runs with
-  `-no-fail`, so its findings never block a merge.
+  `-no-fail`, so its findings never block a merge. This is an accepted design
+  decision (Q-009, 2026-09-27), which makes triage in Code Scanning the only
+  control for gosec findings.
 - **Required remediation:** Add a `govulncheck ./...` step to CI or
   `security.yml` that fails on reachable vulnerabilities. Add
   `.github/dependabot.yml` for the `gomod`, `github-actions`, and `docker`
-  ecosystems. Record an explicit gating policy for gosec (for example, fail
-  on high severity with documented exclusions) in `maint.md`.
+  ecosystems. Keep gosec non-blocking per Q-009, and record that policy and
+  the triage expectation in `maint.md`.
 - **Validation:** The workflow run shows `govulncheck` executing and failing
   on a known-vulnerable test fixture or version (checked once on a branch).
-  Dependabot opens update PRs. The gosec policy is documented and enforced in
-  the workflow.
+  Dependabot opens update PRs. The non-blocking gosec policy is documented in
+  `maint.md`.
 - **Resolution:** None yet.
 
 ### SEC-006: Release artifacts are not signed and have no provenance

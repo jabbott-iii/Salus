@@ -64,3 +64,33 @@ reconstructed from commit messages and diffs, not first-hand records.
 - Reason / reference: The documents did not exist, and `AGENTS.md` requires
   them. No source code, workflows, or configuration were changed.
   Uncommitted at the time of writing.
+
+## 2026-09-27: Maintainer decisions recorded; Phase 0 pipeline fixes
+
+- Change: Recorded decisions on Q-001 to Q-009: CLI only, per-user data
+  directory, archive releases, distinct operational exit code, macOS and
+  Windows resource checks, intentional `CONTRIBUTING.md`/`NOTICE` reset,
+  `.idea/` tracked, CI triggers unchanged, gosec non-blocking. Implemented
+  Phase 0:
+  - Added a root `--version` flag backed by `main.version`, which makes the
+    `-X main.version` release ldflag effective.
+  - In the CI, CD, and Docker workflows, changed the binary, artifact,
+    image, and volume names from "munus" to "salus", and the database
+    variable to `SALUS_DB_PATH`.
+  - Replaced the invalid smoke commands with `--version`, `check list`,
+    `check run --only misconfig` (exit codes 0 and 1 accepted), and
+    `jobs show 1`.
+  - Filled `NOTICE` with the modules actually linked into the binary.
+  - Rewrote the README install section for `.tar.gz`/`.zip` archives with
+    checksum verification.
+- Files: `version.go`, `version_test.go`, `main.go`,
+  `.github/workflows/ci.yml`, `.github/workflows/cd.yml`,
+  `.github/workflows/docker.yml`, `NOTICE`, `README.md`, `intel/notes.md`,
+  `intel/plan.md`, `intel/cybersec.md`, `intel/maint.md`, `intel/map.md`
+- Reason / reference: `7235211` (pushed with `460a24b`) referenced another
+  project's binary and commands, so its smoke steps cannot pass. Validation
+  is in `plan.md` ("Phase 0 validation"). GitHub Actions runs are still
+  pending. The workflow edits were delivered as a patch
+  (`salus-phase0-workflows.patch`, applied with `git apply`), because the
+  remote session cannot write `.github/workflows/`. Uncommitted at the time
+  of writing.

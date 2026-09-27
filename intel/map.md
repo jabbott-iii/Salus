@@ -3,7 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-27 (against commit `7235211`).
+Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+changes).
 
 ## Directory structure
 
@@ -12,6 +13,8 @@ Salus/
 ├── main.go                     Entry point: open DB, seed catalog, run Cobra root
 ├── database_path.go            SALUS_DB_PATH resolution (default "salus.db")
 ├── database_path_test.go
+├── version.go                  Build version (set via -X main.version) + root command wiring
+├── version_test.go
 ├── internal/                   Single Go package holding all application logic
 │   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show
 │   ├── logic-cli_test.go       Command write-error propagation tests
@@ -27,14 +30,14 @@ Salus/
 │   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
 │   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob
 │   ├── scan-store_test.go
-│   ├── logic-tui.go            Empty placeholder (package clause only)
-│   └── ui-form.go              Empty placeholder (package clause only)
+│   ├── logic-tui.go            Empty placeholder, to be removed (CLI-only, Q-001)
+│   └── ui-form.go              Empty placeholder, to be removed (CLI-only, Q-001)
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
 ├── .github/workflows/
 │   ├── ci.yml                  vet, lint, test+coverage, native build smoke (3 OSes)
 │   ├── security.yml            CodeQL + gosec (SARIF)
 │   ├── docker.yml              Image build + smoke test
-│   └── cd.yml                  Tag-triggered 6-target CGO build + GitHub Release
+│   └── cd.yml                  Tag-triggered 6-target CGO build → .tar.gz/.zip + checksums
 ├── .devcontainer/devcontainer.json   Ubuntu base + Go, Docker-outside-of-Docker, Neovim
 ├── Dockerfile                  Multi-stage: golang:1.26-alpine → alpine:3.22
 ├── Makefile                    Release tagging only (tag, push-tag, release)
@@ -44,8 +47,9 @@ Salus/
 └── go.mod, go.sum              Module github.com/jabbott-iii/Salus, go 1.26.0
 ```
 
-Untracked local directories seen during analysis: `.idea/` (JetBrains, not
-ignored) and `.junie/plans/` (empty).
+`.idea/` (JetBrains project files) is tracked (Q-007). Its own `.gitignore`
+excludes per-user files such as `workspace.xml`. `.junie/plans/` exists
+locally but is empty and untracked.
 
 ## Component and dependency view
 
@@ -54,7 +58,7 @@ flowchart LR
     main["main.go"] --> dbpath["database_path.go<br/>SALUS_DB_PATH"]
     main --> NewDatabase
     main --> Seed["EnsureDefaultFeatures<br/>(seed.go)"]
-    main --> Root["NewRootCmd<br/>(logic-cli.go)"]
+    main --> Root["newRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
 
     Root --> CheckList["check list"]
     Root --> CheckRun["check run"]

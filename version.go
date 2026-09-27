@@ -17,26 +17,18 @@ limitations under the License.
 package main
 
 import (
-	"log"
-	"os"
-
 	"github.com/jabbott-iii/Salus/internal"
+	"github.com/spf13/cobra"
 )
 
-func main() {
+// version is reported by --version. Release builds set it with
+// -ldflags "-X main.version=vX.Y.Z" (see .github/workflows/cd.yml).
+var version = "dev"
 
-	// sqlite db creation / use
-	db, err := internal.NewDatabase(databasePathFromEnv())
-	if err != nil {
-		log.Fatalf("failed to initialize database: %v", err)
-	}
-
-	if err := internal.EnsureDefaultFeatures(db); err != nil {
-		log.Fatalf("failed to seed default features: %v", err)
-	}
-
-	rootCmd := newRootCmd(db)
-	if err := rootCmd.Execute(); err != nil {
-		os.Exit(1)
-	}
+// newRootCmd builds the Salus command tree and attaches the build version,
+// which makes Cobra provide the --version flag.
+func newRootCmd(db *internal.Database) *cobra.Command {
+	root := internal.NewRootCmd(db)
+	root.Version = version
+	return root
 }

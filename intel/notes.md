@@ -3,7 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-27 (against commit `7235211`).
+Last reviewed: 2026-09-27 (against commit `460a24b`, plus the uncommitted
+Phase 0 changes recorded in `history.md`).
 
 ## Engineering notes
 
@@ -13,7 +14,8 @@ Last reviewed: 2026-09-27 (against commit `7235211`).
   - the `Dockerfile` comment "Persist sqlite database file (rete.db)";
   - the `Dockerfile` comment "This app is an interactive TUI/CLI". Salus has
     no TUI today;
-  - empty `internal/logic-tui.go` and `internal/ui-form.go`;
+  - empty `internal/logic-tui.go` and `internal/ui-form.go` (to be removed;
+    Salus is CLI-only per Q-001);
   - before `7235211`, `NOTICE` listed `charmbracelet/bubbletea` and
     `charmbracelet/lipgloss`, which are not in `go.mod`.
 
@@ -30,9 +32,12 @@ Salus:
   package `main`. The Go linker silently ignores `-X` for missing symbols, so
   this is a no-op rather than an error.
 
-At `7235211` this commit is local only (`main` is one commit ahead of
-`origin/main`). If pushed as-is, the CI smoke step, the Docker smoke step, and
-the CD smoke step will fail. See Phase 0 in `plan.md`.
+`7235211` was pushed to `origin/main` together with `460a24b`, so the CI
+smoke step and the Docker smoke step are expected to fail on GitHub until the
+Phase 0 changes land (GitHub Actions results were not inspected). As of
+2026-09-27 the working tree renames everything to Salus, uses `SALUS_DB_PATH`,
+smoke-tests real Salus commands, and adds a `main.version` variable so the
+`-X` ldflag and `--version` work. See Phase 0 in `plan.md`.
 
 The CGO build strategy in `cd.yml` fits Salus and should be kept when
 renaming: native runners per OS, pinned llvm-mingw for windows/arm64, and
@@ -55,8 +60,8 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   locking (readers are allowed while the writer holds a RESERVED lock), but
   would deadlock if the pool were limited to one connection, and it reads
   outside the transaction's snapshot.
-- **DB is opened for every command,** including `--help`, `check list`, and
-  `check run --no-save`, so `salus.db` is created in the current directory
+- **DB is opened for every command,** including `--help`, `--version`,
+  `check list`, and `check run --no-save`, so `salus.db` is created in the current directory
   even when nothing is persisted.
 - **`--quiet` with `--json`** still prints JSON, because JSON takes precedence
   in the `switch`.
@@ -88,14 +93,18 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   when they are installed. It asserts only on keys and order.
 
 ### Documentation drift observed
-- The README install section refers to raw binaries named `salus_<os>_<arch>`,
-  while `cd.yml` publishes `.tar.gz`/`.zip` archives, and at `7235211` they
-  are named `munus_*`.
+- The README install section referred to raw binaries named
+  `salus_<os>_<arch>`, while `cd.yml` publishes `.tar.gz`/`.zip` archives
+  (named `munus_*` at `7235211`). Resolved 2026-09-27: archives are canonical
+  (Q-003), and the README install section now describes them and checksum
+  verification.
 - The README has no build-from-source, prerequisites (Go 1.26 plus a C
   toolchain for CGO), configuration, testing, or project-structure sections,
   all of which `AGENTS.md` lists for the README.
-- `NOTICE` ends with "This product includes third-party software:" and an
-  empty list after `7235211`.
+- `NOTICE` ended with "This product includes third-party software:" and an
+  empty list after `7235211`. Resolved 2026-09-27: the list now matches the
+  modules linked into the binary (`go list -deps` for linux, darwin, and
+  windows), with licenses taken from each module's license file.
 - `CONTRIBUTING.md` was emptied in `7235211`. It was restored from history and
   expanded on 2026-09-27 (see `history.md`).
 - `AGENTS.md` refers to "`CONTRIBUTING.md `" with a trailing space in two
@@ -110,16 +119,18 @@ throwaway copy. This differs from a normal build in one way: module content
 was not verified against `go.sum` or the checksum database. Treat the result
 as strong evidence, and treat GitHub Actions results as authoritative.
 
-## Open questions
+## Open questions and decisions
 
-| ID | Question | Why it matters | Owner |
+Decisions recorded 2026-09-27 from the maintainer.
+
+| ID | Question | Why it matters | Decision |
 |---|---|---|---|
-| Q-001 | Is a TUI still planned, for example with Bubble Tea, or should the empty `logic-tui.go` and `ui-form.go` be removed? | Determines whether new dependencies are expected and whether the placeholders are dead code. | Maintainer |
-| Q-002 | Should the default database stay at `./salus.db`, or move to a per-user data directory (for example `$XDG_DATA_HOME/salus/salus.db`)? | Changing it is a behavior change. It affects SEC-004 and cron/CI usage. | Maintainer |
-| Q-003 | What is the canonical release format: raw binaries as the README describes, or archives as `cd.yml` produces? | README install steps and CD packaging must agree. | Maintainer |
-| Q-004 | Should operational errors use a distinct exit code (for example `3`) instead of sharing `1` with WARN? | Changes the public exit-code contract, but makes Salus reliable in scripts. | Maintainer |
-| Q-005 | Should disk, memory, and CPU checks be implemented for macOS and Windows, or documented as Linux-only (and possibly reported as skipped instead of WARN)? | Cross-platform support likely needs `golang.org/x/sys` or per-OS syscalls. The status choice affects exit codes. | Maintainer |
-| Q-006 | Were the removal of `CONTRIBUTING.md` content and the truncation of `NOTICE` in `7235211` intentional? | `CONTRIBUTING.md` was restored on that assumption. `NOTICE` was left untouched pending an answer. | Maintainer |
-| Q-007 | Should `.idea/` be ignored (the `.gitignore` line is commented out) or partially tracked? | `.idea/` shows as untracked and includes per-user `workspace.xml`. | Maintainer |
-| Q-008 | Should CI keep triggering on both `push` to every branch and `pull_request` to every branch? | Same-repo PR branches run CI twice. | Maintainer |
-| Q-009 | Should gosec findings gate merges, and at what severity? | See SEC-005. | Maintainer |
+| Q-001 | Is a TUI still planned, for example with Bubble Tea, or should the empty `logic-tui.go` and `ui-form.go` be removed? | Determines whether new dependencies are expected and whether the placeholders are dead code. | **No TUI. Salus is a pure CLI.** Remove the placeholders (P5-2). |
+| Q-002 | Should the default database stay at `./salus.db`, or move to a per-user data directory (for example `$XDG_DATA_HOME/salus/salus.db`)? | Changing it is a behavior change. It affects SEC-004 and cron/CI usage. | **Per-user data directory.** `SALUS_DB_PATH` still overrides (P1-10). |
+| Q-003 | What is the canonical release format: raw binaries as the README describes, or archives as `cd.yml` produces? | README install steps and CD packaging must agree. | **Archives, as `cd.yml` produces.** README updated. |
+| Q-004 | Should operational errors use a distinct exit code (for example `3`) instead of sharing `1` with WARN? | Changes the public exit-code contract, but makes Salus reliable in scripts. | **Yes.** Distinct exit code (P1-9). |
+| Q-005 | Should disk, memory, and CPU checks be implemented for macOS and Windows, or documented as Linux-only (and possibly reported as skipped instead of WARN)? | Cross-platform support likely needs `golang.org/x/sys` or per-OS syscalls. The status choice affects exit codes. | **Implement for macOS and Windows** (P3-7). |
+| Q-006 | Were the removal of `CONTRIBUTING.md` content and the truncation of `NOTICE` in `7235211` intentional? | `CONTRIBUTING.md` was restored on that assumption. `NOTICE` was left untouched pending an answer. | **Yes, intentional, so that correct data could be filled in.** `CONTRIBUTING.md` (2026-09-27, `460a24b`) and `NOTICE` (P0-5) now hold verified content. |
+| Q-007 | Should `.idea/` be ignored (the `.gitignore` line is commented out) or partially tracked? | `.idea/` shows as untracked and includes per-user `workspace.xml`. | **Track.** Done in `460a24b`. `.idea/.gitignore` keeps `workspace.xml` and other per-user files out. |
+| Q-008 | Should CI keep triggering on both `push` to every branch and `pull_request` to every branch? | Same-repo PR branches run CI twice. | **Yes, keep both triggers.** No change. |
+| Q-009 | Should gosec findings gate merges, and at what severity? | See SEC-005. | **No.** gosec stays non-blocking. Findings are triaged in GitHub Code Scanning. |

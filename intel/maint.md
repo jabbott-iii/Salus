@@ -7,7 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-27 (against commit `7235211`).
+Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+changes).
 
 ## 1. Purpose and scope
 
@@ -16,7 +17,8 @@ Salus is a single-binary Go CLI that runs local environment health checks
 misconfigurations), prints a PASS/WARN/FAIL report, and records each run as a
 job in a local SQLite database.
 
-Salus has no network listener, no HTTP API, and no authentication layer. The
+Salus is a command-line tool only. No TUI is planned (Q-001). It has no
+network listener, no HTTP API, and no authentication layer. The
 REST API rules in `AGENTS.md` do not currently apply; they become binding if an
 HTTP interface is ever added.
 
@@ -24,12 +26,12 @@ HTTP interface is ever added.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry point | `main.go`, `database_path.go` | Resolve DB path from `SALUS_DB_PATH`, open DB, seed catalog, build and execute the root command. |
+| Entry point | `main.go`, `database_path.go`, `version.go` | Resolve DB path from `SALUS_DB_PATH`, open DB, seed catalog, build the root command with the build `version` (`--version`), and execute it. |
 | CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`), flag parsing, exit-code mapping. |
 | Checks | `internal/health.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
 | Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code mapping. |
 | Persistence | `internal/database.go`, `internal/scan-store.go`, `internal/seed.go` | GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
-| Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only). See `notes.md` for the open question about a TUI. |
+| Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only), scheduled for removal because Salus is CLI-only (Q-001, `plan.md` P5-2). |
 
 All application code lives in the single package
 `github.com/jabbott-iii/Salus/internal`. Dependency direction today is:
@@ -55,17 +57,21 @@ only shared symbol is the `databasePathEnvVar` constant, which the
 Changing any of the following is a breaking change and requires explicit
 authorization plus README and `history.md` updates:
 
-- **Command names and flags** documented in `README.md`.
+- **Command names and flags** documented in `README.md`, including the root
+  `--version` flag (output `salus version <version>`, where `<version>` is
+  `dev` unless set with `-ldflags "-X main.version=..."`).
 - **Exit codes of `check run`:** `0` all PASS, `1` any WARN, `2` any FAIL
-  (`ExitCodeFor`). Note that Cobra/command errors currently also exit `1`
-  (see `plan.md`).
+  (`ExitCodeFor`). Cobra/command errors currently also exit `1`. A distinct
+  exit code for operational errors is approved (Q-004) and planned as `3`
+  (`plan.md` P1-9). Until it lands, treat `1` as ambiguous.
 - **Check keys:** `disk-space`, `memory`, `cpu-load`, `docker-status`,
   `kubernetes-status`, `service-uptime`, `misconfig`. Keys are stored in the
   database and accepted by `--only`; never rename a key without a migration.
 - **JSON output shape:** an array of objects with `key`, `status`, `message`,
   and `duration_ns` (nanoseconds, from `time.Duration`).
 - **Environment variable:** `SALUS_DB_PATH` (default `salus.db` in the current
-  working directory).
+  working directory). The default is approved to move to a per-user data
+  directory (Q-002, `plan.md` P1-10). `SALUS_DB_PATH` will keep overriding it.
 - **Database schema:** tables for `FeatureCategory`, `Feature`, `ScanJob`,
   `ScanResult` managed by GORM `AutoMigrate`.
 
@@ -133,9 +139,12 @@ authorization plus README and `history.md` updates:
 - **CGO is required.** `gorm.io/driver/sqlite` uses `github.com/mattn/go-sqlite3`.
   A `CGO_ENABLED=0` build compiles but cannot open the database at runtime.
   Every build needs a C toolchain.
-- **Resource checks are Linux-only.** Disk, memory, CPU load, and host uptime
-  read `/proc` and `statfs`. On other platforms they return `WARN`, so
-  `check run` exits `1` on macOS and Windows by design today.
+- **Resource checks are Linux-only today.** Disk, memory, CPU load, and host
+  uptime read `/proc` and `statfs`. On other platforms they return `WARN`, so
+  `check run` exits `1` on macOS and Windows. macOS and Windows
+  implementations are approved (Q-005, `plan.md` P3-7). Prefer the standard
+  library `syscall` package. Adding `golang.org/x/sys` requires a recorded
+  reason and a `NOTICE` update.
 - **Direct dependencies:** `spf13/cobra`, `gorm.io/gorm`,
   `gorm.io/driver/sqlite`. Do not add dependencies without a documented
   reason in `plan.md` or `notes.md`; prefer the standard library.
@@ -157,16 +166,25 @@ authorization plus README and `history.md` updates:
 
 - `ci.yml`: `go mod tidy` drift check, `go vet`, `golangci-lint`, tests with
   coverage (Codecov), and a native build plus smoke test on each OS.
-- `security.yml`: CodeQL (`security-extended`) and gosec (SARIF upload,
-  non-blocking).
+- `security.yml`: CodeQL (`security-extended`) and gosec (SARIF upload).
+  gosec is intentionally non-blocking (Q-009). Its findings must be triaged
+  in GitHub Code Scanning rather than ignored.
 - `docker.yml`: image build plus smoke tests on `main` and PRs to `main`.
-- `cd.yml`: on `v*` tags, builds six OS/arch targets with CGO, smoke tests,
-  packages, checksums, and publishes a GitHub Release.
+- `cd.yml`: on `v*` tags, builds six OS/arch targets with CGO, injects the
+  tag with `-X main.version`, smoke tests, packages, generates checksums, and
+  publishes a GitHub Release. The canonical release format is
+  `salus_<os>_<arch>.tar.gz` (Linux, macOS) and `salus_<os>_<arch>.zip`
+  (Windows), plus `checksums.txt` (Q-003). The README install section must
+  match it.
 - Third-party actions are pinned by commit SHA with a version comment. Keep
   that practice for every new action.
 - Smoke tests and artifact names must use the Salus binary name, the
-  `SALUS_DB_PATH` variable, and real Salus commands. As of `7235211` they do
-  not (see `plan.md`, Phase 0).
+  `SALUS_DB_PATH` variable, and real Salus commands. Smoke steps accept
+  `check run` exit codes 0 and 1 only, because runner host state varies, and
+  assert persistence with `jobs show`. (`7235211` used another project's
+  names and commands; this was corrected in Phase 0 on 2026-09-27.)
+- CI triggers on `push` to every branch and `pull_request` to every branch.
+  Keep both (Q-008).
 - Releases are cut with `make release VERSION=vX.Y.Z`, which creates and
   pushes an annotated tag.
 

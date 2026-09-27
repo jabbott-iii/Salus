@@ -61,9 +61,14 @@ jobs:
         env:
           CGO_ENABLED: "1"
           EXT: ${{ runner.os == 'Windows' && '.exe' || '' }}
-          MUNUS_DB_PATH: ${{ runner.temp }}/ci-smoke.db
+          SALUS_DB_PATH: ${{ runner.temp }}/ci-smoke.db
         run: |
-          go build -o "munus-ci${EXT}" .
-          "./munus-ci${EXT}" --version
-          "./munus-ci${EXT}" add --title "smoke" --description "CI smoke test"
-          "./munus-ci${EXT}" list | grep -q "smoke"
+          go build -o "salus-ci${EXT}" .
+          "./salus-ci${EXT}" --version
+          "./salus-ci${EXT}" check list | grep misconfig >/dev/null
+          # check run exits 0/1/2 for PASS/WARN/FAIL. Runner host state varies, so
+          # only an exit code above 1 fails here; persistence is asserted below.
+          status=0
+          "./salus-ci${EXT}" check run --only misconfig || status=$?
+          if [ "$status" -gt 1 ]; then echo "check run exited with $status"; exit 1; fi
+          "./salus-ci${EXT}" jobs show 1 | grep misconfig >/dev/null

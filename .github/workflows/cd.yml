@@ -80,13 +80,13 @@ jobs:
         run: |
           ext=""
           if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
-          out="dist/munus_${GOOS}_${GOARCH}${ext}"
+          out="dist/salus_${GOOS}_${GOARCH}${ext}"
           tags=""
           ldflags="-s -w -X main.version=${VERSION}"
           if [ "$GOOS" = "linux" ]; then
             # Link statically so the binary does not depend on the runner's glibc
             # version; netgo/osusergo avoid glibc NSS, and extension loading
-            # (dlopen) is not used by munus.
+            # (dlopen) is not used by salus.
             tags="sqlite_omit_load_extension,osusergo,netgo"
             ldflags="$ldflags -linkmode external -extldflags -static"
           fi
@@ -98,15 +98,23 @@ jobs:
         if: matrix.smoke
         shell: bash
         env:
-          MUNUS_DB_PATH: ${{ runner.temp }}/smoke.db
+          SALUS_DB_PATH: ${{ runner.temp }}/smoke.db
+          VERSION: ${{ steps.meta.outputs.tag }}
         run: |
           bin="./${{ steps.build.outputs.binary }}"
-          "$bin" --version
+          # Confirms the -X main.version ldflag took effect.
+          got="$("$bin" --version)"
+          if [ "$got" != "salus version $VERSION" ]; then echo "unexpected --version output: $got"; exit 1; fi
           if [ "${{ matrix.goos }}" = "linux" ]; then
             file "$bin" | grep -q "statically linked"
           fi
-          "$bin" add --title "smoke" --description "release smoke test"
-          "$bin" list | grep -q "smoke"
+          "$bin" check list | grep misconfig >/dev/null
+          # check run exits 0/1/2 for PASS/WARN/FAIL. Runner host state varies, so
+          # only an exit code above 1 fails here; persistence is asserted below.
+          status=0
+          "$bin" check run --only misconfig || status=$?
+          if [ "$status" -gt 1 ]; then echo "check run exited with $status"; exit 1; fi
+          "$bin" jobs show 1 | grep misconfig >/dev/null
 
       - name: Upload binary
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -134,7 +142,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          for bin in munus_*; do
+          for bin in salus_*; do
             name="${bin%.exe}"
             chmod +x "$bin"
             if [ "$bin" != "$name" ]; then

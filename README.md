@@ -33,6 +33,7 @@ Salus is organized into focused command groups:
 
 - `salus check` — list and run health checks
 - `salus jobs` — view past health check runs
+- `salus --version` — print the Salus version
 
 ### check
 
@@ -77,40 +78,46 @@ salus jobs show 7
 
 ## Install:
 
-Download the appropriate binary for your platform below and make it executable:
+Release archives and a `checksums.txt` file are published on the
+[GitHub Releases](https://github.com/jabbott-iii/Salus/releases) page for each
+version tag. Each archive contains a single binary with the same base name.
 
-Linux:
-```
-chmod +x salus_linux_amd64
-```
-```
+| Platform | Archive |
+|---|---|
+| Linux (x86-64) | `salus_linux_amd64.tar.gz` |
+| Linux (ARM64) | `salus_linux_arm64.tar.gz` |
+| macOS (Apple Silicon) | `salus_darwin_arm64.tar.gz` |
+| macOS (Intel) | `salus_darwin_amd64.tar.gz` |
+| Windows (x86-64) | `salus_windows_amd64.zip` |
+| Windows (ARM64) | `salus_windows_arm64.zip` |
+
+Download the archive for your platform and `checksums.txt` into the same
+directory, then verify, extract, and install it.
+
+Linux (use `linux_arm64` in place of `linux_amd64` on ARM64):
+```bash
+grep salus_linux_amd64.tar.gz checksums.txt | sha256sum --check
+tar -xzf salus_linux_amd64.tar.gz
 sudo mv salus_linux_amd64 /usr/local/bin/salus
+salus --version
 ```
- or
-```
-chmod +x salus_linux_arm64
-```
-```
-sudo mv salus_linux_arm64 /usr/local/bin/salus
-```
-macOS:
-```
-chmod +x salus_darwin_arm64
-```
-```
+
+macOS (use `darwin_amd64` in place of `darwin_arm64` on Intel Macs):
+```bash
+grep salus_darwin_arm64.tar.gz checksums.txt | shasum -a 256 --check
+tar -xzf salus_darwin_arm64.tar.gz
 sudo mv salus_darwin_arm64 /usr/local/bin/salus
+salus --version
 ```
-  or
+
+Windows, in PowerShell (use `windows_arm64` in place of `windows_amd64` on ARM64):
+```powershell
+# Compare this hash with the salus_windows_amd64.zip line in checksums.txt
+(Get-FileHash .\salus_windows_amd64.zip -Algorithm SHA256).Hash.ToLower()
+Expand-Archive .\salus_windows_amd64.zip -DestinationPath .
+Rename-Item .\salus_windows_amd64.exe salus.exe
 ```
-chmod +x salus_darwin_amd64
-```
-```
-sudo mv salus_darwin_amd64 /usr/local/bin/salus
-```
-Windows:
-```
-Download salus_windows_amd64.exe and add it to your PATH as salus.
-```
+Then add the directory containing `salus.exe` to your `PATH`.
 
 ## Docker
 

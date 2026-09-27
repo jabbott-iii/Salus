@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      IMAGE_NAME: munus:${{ github.sha }}
+      IMAGE_NAME: salus:${{ github.sha }}
 
     steps:
       - name: Checkout
@@ -28,11 +28,18 @@ jobs:
         run: docker build --tag "$IMAGE_NAME" --file Dockerfile .
 
       - name: Smoke test CLI help
-        run: docker run --rm "$IMAGE_NAME" --help
+        run: |
+          docker run --rm "$IMAGE_NAME" --help
+          docker run --rm "$IMAGE_NAME" --version
 
-      # Exercises the database as the image's non-root user on its data volume.
+      # Exercises the database on the image's /app/data volume across two runs.
+      # The image still runs as root; see SEC-002 in intel/cybersec.md.
       - name: Smoke test database access
         run: |
-          docker volume create munus-smoke
-          docker run --rm -v munus-smoke:/app/data "$IMAGE_NAME" add --title smoke --description "docker smoke test"
-          docker run --rm -v munus-smoke:/app/data "$IMAGE_NAME" list | grep -q smoke
+          docker volume create salus-smoke
+          # check run exits 0/1/2 for PASS/WARN/FAIL; only an exit code above 1
+          # fails here, and persistence is asserted by the next command.
+          status=0
+          docker run --rm -v salus-smoke:/app/data "$IMAGE_NAME" check run --only misconfig || status=$?
+          if [ "$status" -gt 1 ]; then echo "check run exited with $status"; exit 1; fi
+          docker run --rm -v salus-smoke:/app/data "$IMAGE_NAME" jobs show 1 | grep misconfig >/dev/null

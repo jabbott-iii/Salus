@@ -4,10 +4,12 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-27 (against commit `7235211`).
+Last reviewed: 2026-09-27 (against commit `460a24b` plus uncommitted Phase 0
+changes). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
-`In Progress`, `Blocked`, `Done`.
+`In Progress`, `Blocked`, `Awaiting CI` (implemented and validated locally,
+waiting for a GitHub Actions run), `Done`.
 
 ## Baseline (verified 2026-09-27)
 
@@ -37,17 +39,37 @@ Not run: `golangci-lint`, gosec, CodeQL, `govulncheck`, the Docker image build,
 and macOS/Windows tests (tooling or network unavailable in the analysis
 environment). GitHub Actions results were not inspected.
 
-## Phase 0: Make the pipeline match Salus (blocker before pushing `7235211`)
+## Phase 0: Make the pipeline match Salus (CI broken on `main` since `7235211` was pushed)
 
 Goal: CI, Docker, and CD workflows build, smoke-test, and release Salus.
 
+### Phase 0 validation (2026-09-27, uncommitted working tree)
+
+| Check | Result |
+|---|---|
+| `gofmt -s -l .`, `go vet ./...` | Clean / pass |
+| `go test ./...`, `go test -race ./...` | Pass (root package 42.9%, `internal` 65.7%) |
+| `go build -ldflags "-s -w -X main.version=v0.0.0-verify"`, then `--version` | Prints `salus version v0.0.0-verify` |
+| `actionlint` 1.7.7 with shellcheck 0.11.0 on all workflows | One finding, identical before and after the change: `windows-11-arm` is not in actionlint 1.7.7's runner-label list (pre-existing in `cd.yml`) |
+| CI, CD, and Docker smoke scripts extracted from the YAML and run with bash `-eo pipefail` against the built binary (Docker via a local shim) | All pass. A wrong `VERSION` and a `check run` exit code of 2 both fail the step, as intended |
+| Release packaging commands from the README (`sha256sum --check`, `shasum -a 256 --check`, `tar -xzf`) against archives built the way `cd.yml` builds them | Pass |
+
+Not run: GitHub Actions itself, the Docker image build, macOS and Windows
+execution, and a tag-triggered release.
+
+Delivery note: the remote session cannot write `.github/workflows/`, so the
+P0-2 to P0-4 edits were handed over as `salus-phase0-workflows.patch`,
+checked with `git apply --check` against `460a24b`, with CRLF line endings
+preserved in `ci.yml` and `cd.yml`. Until that patch is applied, the
+workflow files in the repository still contain the old "munus" steps.
+
 | ID | Work | Acceptance criteria | Status |
 |---|---|---|---|
-| P0-1 | Add version reporting: `var version = "dev"` in `main.go`, passed to the root command's `Version` field so `-X main.version=` takes effect. | `salus --version` prints the injected version. A unit test covers the default. | Proposed |
-| P0-2 | Fix the `ci.yml` smoke step: binary `salus-ci`, `SALUS_DB_PATH`, commands `--version`, `check list`, `check run --only misconfig` (accept exit 0 or 1, fail on 2 or higher; see P1-5 for Windows), then `jobs show 1 \| grep -q misconfig`. | The CI matrix is green on ubuntu, macOS, and Windows. | Proposed |
-| P0-3 | Fix `cd.yml`: `munus` → `salus` in artifact names, comments, env var, and smoke commands (same as P0-2). Resolve Q-003 and make packaging match the README. | A tag on a fork or test branch produces six `salus_*` artifacts plus `checksums.txt`. Every smoke-enabled target passes. | Blocked on Q-003 |
-| P0-4 | Fix `docker.yml`: image tag `salus:<sha>`, volume `salus-smoke`, commands `check run --only misconfig` and `jobs list`. Either implement the non-root user (SEC-002) or remove the non-root comment. | The Docker workflow is green on a PR to `main`. | Proposed |
-| P0-5 | Restore `NOTICE` third-party entries to match `go.mod`: cobra (Apache-2.0), pflag (BSD-3-Clause), mousetrap (Apache-2.0), gorm (MIT), gorm sqlite driver (MIT), go-sqlite3 (MIT, bundles public-domain SQLite), inflection (MIT), now (MIT), x/text (BSD-3-Clause). | `NOTICE` lists every module in `go.mod` and nothing else. | Blocked on Q-006 |
+| P0-1 | Add version reporting: `var version = "dev"` in `version.go`, set on the root command's `Version` field so `-X main.version=` takes effect. | `salus --version` prints the injected version. A unit test covers it. | Done |
+| P0-2 | Fix the `ci.yml` smoke step: binary `salus-ci`, `SALUS_DB_PATH`, commands `--version`, `check list`, `check run --only misconfig` (accept exit 0 or 1, fail on 2 or higher; see P1-5 for Windows), then `jobs show 1 \| grep misconfig >/dev/null`. (`grep -q` is avoided under `pipefail`: it can exit early and turn the writer's broken pipe into a failure.) | The CI matrix is green on ubuntu, macOS, and Windows. | Awaiting CI |
+| P0-3 | Fix `cd.yml`: `munus` → `salus` in artifact names, comments, env var, and smoke commands (same as P0-2). Q-003 decided: archives are canonical, and the README install section now matches. The smoke step also checks that `--version` output equals `salus version <tag>`. | A tag on a fork or test branch produces six `salus_*` archives plus `checksums.txt`. Every smoke-enabled target passes. | Awaiting CI |
+| P0-4 | Fix `docker.yml`: image tag `salus:<sha>`, volume `salus-smoke`, commands `check run --only misconfig` and `jobs show 1`. The inaccurate non-root comment was replaced with a pointer to SEC-002. `--version` added to the smoke step. | The Docker workflow is green on a PR to `main`. | Awaiting CI |
+| P0-5 | Restore `NOTICE` third-party entries to match `go.mod`: cobra (Apache-2.0), pflag (BSD-3-Clause), mousetrap (Apache-2.0), gorm (MIT), gorm sqlite driver (MIT), go-sqlite3 (MIT, bundles public-domain SQLite), inflection (MIT), now (MIT), x/text (BSD-3-Clause). | `NOTICE` lists every module linked into the binary, and nothing else. Line endings (CRLF) preserved. | Done |
 
 ## Phase 1: Correctness and testability
 
@@ -61,8 +83,8 @@ Goal: CI, Docker, and CD workflows build, smoke-test, and release Salus.
 | P1-6 | Define `--quiet` with `--json` behavior: make them mutually exclusive (Cobra `MarkFlagsMutuallyExclusive`), or let quiet win. | The documented behavior is covered by a test and the README is updated. | Proposed |
 | P1-7 | Keep outcome messages single-line. `service-uptime` currently embeds the full combined `systemctl` output. | A test with multi-line fake output yields a single-line message. | Proposed |
 | P1-8 | Make checks testable without host state: inject a command runner (`exec` wrapper) and file readers. Add fixture-based parser tests for `/proc/meminfo`, `/proc/loadavg`, and `/proc/uptime`, and fake-runner tests for docker, kubectl, and systemctl paths. Stop `TestRunChecksDefaultsToAllChecks` from executing real CLIs. | No test shells out to real `docker`, `kubectl`, or `systemctl`. `internal` coverage is above 80%. | Proposed |
-| P1-9 | Use a distinct exit code for operational errors (Q-004). | The decision is recorded, and implemented with README and `history.md` updates if approved. | Blocked on Q-004 |
-| P1-10 | Open the database only for commands that need it, not for `--help`, `completion`, or `check run --no-save`. Related to Q-002. | Running `salus --help` in an empty directory creates no file. | Blocked on Q-002 |
+| P1-9 | Use a distinct exit code for operational errors (Q-004: approved). Proposed value `3`, for any error that prevents a complete run: bad flags, unknown `--only` key, database failure. Builds on P1-1. | Tests cover exit code 3 for each error class. README exit-code section, `maint.md` contracts, and `history.md` updated. Smoke steps already tolerate only 0 and 1, so they catch 3. | Ready |
+| P1-10 | Move the default database to a per-user data directory (Q-002: approved) and open it only for commands that need it, not `--help`, `--version`, `completion`, or `check run --no-save`. Proposed locations: Linux `$XDG_DATA_HOME/salus/salus.db` (fallback `~/.local/share/salus/salus.db`), macOS `~/Library/Application Support/salus/salus.db`, Windows `%LocalAppData%\salus\salus.db`. `SALUS_DB_PATH` keeps overriding (the container image sets it). Create the directory `0700` and the file `0600` (SEC-004). Document that an existing `./salus.db` is no longer read by default. | Running `salus --help` in an empty directory creates no file. Per-OS path resolution is unit-tested. README configuration is updated. | Ready |
 
 ## Phase 2: Security hardening
 
@@ -73,7 +95,7 @@ Order by risk and effort. Update `cybersec.md` status as each item moves.
 | P2-1 | SEC-001: validate `--service` and pass `--` to `systemctl`. | P1-8 (runner injection makes the test clean) | Proposed |
 | P2-2 | SEC-004: create the DB file with `0600`, check the effective DB path in `misconfig` (including read bits), and bound message length. | P1-3, P1-5 | Proposed |
 | P2-3 | SEC-002 and SEC-003: non-root container user, digest-pinned base images, `.dockerignore`. | P0-4 | Proposed |
-| P2-4 | SEC-005: `govulncheck` in CI, `.github/dependabot.yml` (gomod, github-actions, docker), gosec gating policy (Q-009). | none | Proposed |
+| P2-4 | SEC-005: `govulncheck` in CI and `.github/dependabot.yml` (gomod, github-actions, docker). gosec stays non-blocking (Q-009), and that policy is recorded in `maint.md`. | none | Proposed |
 | P2-5 | SEC-007: README container guidance. | P4-1 | Proposed |
 | P2-6 | SEC-006: release provenance or signing. | P0-3 | Proposed |
 
@@ -91,14 +113,14 @@ needs tests without host dependence (P1-8) and README updates.
 | P3-4 | Broader misconfiguration detection: kubeconfig permissions, Docker socket permissions, world-writable `PATH` entries, and DB file mode (with P2-2). | Every rule gets a stable identifier in the message and a test. | Proposed |
 | P3-5 | Machine-readable history: `jobs list --json` and `jobs show --json`. | Additive. Does not change the `check run --json` array shape. | Proposed |
 | P3-6 | Job retention: a way to prune old jobs (for example `jobs prune --older-than 30d`). | Prevents unbounded DB growth under cron. | Proposed |
-| P3-7 | macOS and Windows resource checks (Q-005). | Likely needs `golang.org/x/sys`. Requires a dependency decision. | Blocked on Q-005 |
+| P3-7 | macOS and Windows resource checks (Q-005: approved). macOS: `statfs`, sysctl (`hw.memsize`, `vm.loadavg`, `kern.boottime`, page counts). Windows: kernel32 (`GetDiskFreeSpaceExW`, `GlobalMemoryStatusEx`, `GetTickCount64`). Windows has no load average, so CPU load needs its own definition (for example utilization sampled with `GetSystemTimes`), recorded in `maint.md`. | Try the standard library `syscall` package first. Adopt `golang.org/x/sys` only if it proves insufficient, and record why. Then update `NOTICE`. Unsupported-platform stubs remain for other OSes. | Ready |
 | P3-8 | Multiple services in one run (for example a repeatable `--service`). | Output and storage use one outcome per key today. Needs a design for per-service keys. | Proposed |
 
 ## Phase 4: Documentation and developer experience
 
 | ID | Work | Status |
 |---|---|---|
-| P4-1 | Align the README with the `AGENTS.md` section order: prerequisites (Go 1.26, C toolchain for CGO), build from source, configuration (`SALUS_DB_PATH`), exit codes, testing and quality checks, project structure, accurate install steps (Q-003), and container caveats (SEC-007). | Proposed |
+| P4-1 | Align the README with the `AGENTS.md` section order: prerequisites (Go 1.26, C toolchain for CGO), build from source, configuration (`SALUS_DB_PATH`), exit codes, testing and quality checks, project structure, and container caveats (SEC-007). The install section was already updated for archives in Phase 0 (Q-003). Add macOS Gatekeeper guidance for the unsigned binaries after confirming the behavior on a Mac (see SEC-006). | Proposed |
 | P4-2 | Add Makefile targets `build`, `test`, `vet`, `lint`, `fmt`, and `cover`, keeping the existing release targets unchanged. | Proposed |
 | P4-3 | Add an explicit `.golangci.yml` so the linter set does not drift with golangci-lint defaults. | Proposed |
 | P4-4 | Add `SECURITY.md` with a vulnerability reporting channel. Needs maintainer input on the channel. | Proposed |
@@ -110,12 +132,13 @@ needs tests without host dependence (P1-8) and README updates.
 | ID | Work | Status |
 |---|---|---|
 | P5-1 | Once the package grows, split `internal` into focused packages (for example `internal/checks`, `internal/store`, `internal/report`, `internal/cli`). Rename hyphenated files only as part of that move. | Proposed |
-| P5-2 | Implement or remove the TUI placeholders (Q-001). | Blocked on Q-001 |
+| P5-2 | Remove the empty TUI placeholders `internal/logic-tui.go` and `internal/ui-form.go` (Q-001: CLI only). Fix the Dockerfile "TUI" comment with P4-6. | Ready |
 
 ## Recommended sequence
 
-1. **M1, green pipeline:** P0-1, P0-2, P0-4, then P0-3 and P0-5 once Q-003
-   and Q-006 are answered. Push `7235211` only together with these fixes.
+1. **M1, green pipeline:** P0-1 to P0-5 are implemented. Commit and push
+   them, then confirm the CI and Docker workflows pass. Exercise CD with a test
+   tag on a fork, or with the first real tag.
 2. **M2, testable core:** P1-1, P1-8, P1-2, P1-5, P1-3, P1-4, P1-7, P1-6.
 3. **M3, hardened:** P2-1 through P2-4, and P2-5 with P4-1.
 4. **M4, first tagged release (`v0.1.0`):** P4-1, P4-2, P2-6, P3-1.
