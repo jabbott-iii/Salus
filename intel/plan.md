@@ -4,8 +4,8 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
-changes). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
+Last reviewed: 2026-09-27 (against commit `0d3b91a`; CI, Docker, and
+Security workflows green). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
 `In Progress`, `Blocked`, `Awaiting CI` (implemented and validated locally,
@@ -77,9 +77,9 @@ workflow files in the repository still contain the old "munus" steps.
 | ID | Work | Acceptance criteria | Status |
 |---|---|---|---|
 | P0-1 | Add version reporting: `var version = "dev"` in `version.go`, set on the root command's `Version` field so `-X main.version=` takes effect. | `salus --version` prints the injected version. A unit test covers it. | Done |
-| P0-2 | Fix the `ci.yml` smoke step: binary `salus-ci`, `SALUS_DB_PATH`, commands `--version`, `check list`, `check run --only misconfig` (accept exit 0 or 1, fail on 2 or higher; see P1-5 for Windows), then `jobs show 1 \| grep misconfig >/dev/null`. (`grep -q` is avoided under `pipefail`: it can exit early and turn the writer's broken pipe into a failure.) | The CI matrix is green on ubuntu, macOS, and Windows. CI #45 (`4995446`): ubuntu and macOS green. Windows failed in tests (unclosed DB, fixed by P1-4). Awaiting the next Windows run. | Awaiting CI |
+| P0-2 | Fix the `ci.yml` smoke step: binary `salus-ci`, `SALUS_DB_PATH`, commands `--version`, `check list`, `check run --only misconfig` (accept exit 0 or 1, fail on 2 or higher; see P1-5 for Windows), then `jobs show 1 \| grep misconfig >/dev/null`. (`grep -q` is avoided under `pipefail`: it can exit early and turn the writer's broken pipe into a failure.) | The CI matrix is green on ubuntu, macOS, and Windows. CI #45 (`4995446`): ubuntu and macOS green. Windows failed in tests (unclosed DB, fixed by P1-4). Awaiting the next Windows run. CI #46 (`0d3b91a`, run 36353006078) is green on ubuntu, macOS, and Windows. The smoke step passed on all three. | Done |
 | P0-3 | Fix `cd.yml`: `munus` → `salus` in artifact names, comments, env var, and smoke commands (same as P0-2). Q-003 decided: archives are canonical, and the README install section now matches. The smoke step also checks that `--version` output equals `salus version <tag>`. | A tag on a fork or test branch produces six `salus_*` archives plus `checksums.txt`. Every smoke-enabled target passes. | Awaiting CI |
-| P0-4 | Fix `docker.yml`: image tag `salus:<sha>`, volume `salus-smoke`, commands `check run --only misconfig` and `jobs show 1`. The inaccurate non-root comment was replaced with a pointer to SEC-002. `--version` added to the smoke step. | The Docker workflow is green on a PR to `main`. | Awaiting CI |
+| P0-4 | Fix `docker.yml`: image tag `salus:<sha>`, volume `salus-smoke`, commands `check run --only misconfig` and `jobs show 1`. The inaccurate non-root comment was replaced with a pointer to SEC-002. `--version` added to the smoke step. | The Docker workflow is green on a PR to `main`. The Docker workflow is green on `0d3b91a` (run 36353006162). | Done |
 | P0-5 | Restore `NOTICE` third-party entries to match `go.mod`: cobra (Apache-2.0), pflag (BSD-3-Clause), mousetrap (Apache-2.0), gorm (MIT), gorm sqlite driver (MIT), go-sqlite3 (MIT, bundles public-domain SQLite), inflection (MIT), now (MIT), x/text (BSD-3-Clause). | `NOTICE` lists every module linked into the binary, and nothing else. Line endings (CRLF) preserved. | Done |
 
 ## Phase 1: Correctness and testability
@@ -89,8 +89,8 @@ workflow files in the repository still contain the old "munus" steps.
 | P1-1 | Remove `os.Exit` from `check run`'s `RunE`. Return a typed exit-status error and map it to the exit code in `main`, keeping codes 0/1/2 unchanged. | Table tests execute `check run` through `cmd.Execute()` and cover exit status, `--json`, `--fail-only`, `--quiet`, and `--no-save`. `newCheckRunCmd` coverage is above 80%. Done: `check run` returns `*ExitStatusError`, `main.run` maps it. `newCheckRunCmd` coverage 89.7%. | Done |
 | P1-2 | `RecordScan`: use `tx` for `featureByKey`, and record the real start time (captured before `RunChecks`) so `StartedAt` and `FinishedAt` reflect execution. | A test asserts `StartedAt <= FinishedAt` with a measurable gap for a slow fake check. Feature lookups use `tx`. Done: `RecordScan(db, startedAt, outcomes)` and `featureByKey(tx, ...)`. `TestRecordScanKeepsStartTime` records a start time 2s in the past and reads the job back from SQLite, instead of using a slow fake check. `TestCheckRunPassRecordsJob` checks `FinishedAt >= StartedAt` end to end. | Done |
 | P1-3 | Define `SALUS_DB_PATH` and the default path once, and consume them from both `main` and `internal`. | One definition. Existing tests still pass. Done: `internal.DatabasePathEnv` / `internal.DefaultDatabasePath`. | Done |
-| P1-4 | Close the database (the underlying `*sql.DB`) before exit. | A clean shutdown path exists. No behavior change. Done locally: `Database.Close`, deferred in `main.run` and registered with `t.Cleanup` in `newTestDatabase`. Fixes the Windows CI failure (`TempDir RemoveAll cleanup ... being used by another process`, run 36343455341). Awaiting a green Windows run. | Awaiting CI |
-| P1-5 | `misconfig`: skip the POSIX permission-bit check on Windows. Go reports `0666` for any non-read-only file there (`os/types_windows.go`), which causes a false WARN whenever `SALUS_DB_PATH` is set. Inferred from the Go source, not yet observed on Windows. | A Windows CI test with `SALUS_DB_PATH` set shows `misconfig` returning PASS. Done locally, with a Windows-only expectation in `TestCheckMisconfigurationDatabasePermissions`. Awaiting a Windows run. | Awaiting CI |
+| P1-4 | Close the database (the underlying `*sql.DB`) before exit. | A clean shutdown path exists. No behavior change. Done locally: `Database.Close`, deferred in `main.run` and registered with `t.Cleanup` in `newTestDatabase`. Fixes the Windows CI failure (`TempDir RemoveAll cleanup ... being used by another process`, run 36343455341). Awaiting a green Windows run. CI #46 (`0d3b91a`, run 36353006078) is green on ubuntu, macOS, and Windows. The Windows TempDir failure is gone. | Done |
+| P1-5 | `misconfig`: skip the POSIX permission-bit check on Windows. Go reports `0666` for any non-read-only file there (`os/types_windows.go`), which causes a false WARN whenever `SALUS_DB_PATH` is set. Inferred from the Go source, not yet observed on Windows. | A Windows CI test with `SALUS_DB_PATH` set shows `misconfig` returning PASS. Done locally, with a Windows-only expectation in `TestCheckMisconfigurationDatabasePermissions`. Awaiting a Windows run. CI #46 (`0d3b91a`, run 36353006078) is green on ubuntu, macOS, and Windows. The Windows-only expectation ran there. | Done |
 | P1-6 | Define `--quiet` with `--json` behavior: make them mutually exclusive (Cobra `MarkFlagsMutuallyExclusive`), or let quiet win. | The documented behavior is covered by a test and the README is updated. Done: `--quiet` wins over `--json` (chosen so the combination is not an error). README updated. | Done |
 | P1-7 | Keep outcome messages single-line. `service-uptime` currently embeds the full combined `systemctl` output. | A test with multi-line fake output yields a single-line message. Done: `firstLine` for `systemctl` output, covered by a multi-line test. The `docker-status` success message can still be multi-line (see `notes.md`). | Done |
 | P1-8 | Make checks testable without host state: inject a command runner (`exec` wrapper) and file readers. Add fixture-based parser tests for `/proc/meminfo`, `/proc/loadavg`, and `/proc/uptime`, and fake-runner tests for docker, kubectl, and systemctl paths. Stop `TestRunChecksDefaultsToAllChecks` from executing real CLIs. | No test shells out to real `docker`, `kubectl`, or `systemctl`. `internal` coverage is above 80%. Done: `lookPath`/`runCommand` seams on `CheckOptions`, `fakeToolOptions`, and `parseMeminfo`/`parseLoadAverage`/`parseUptime` fixture tests. `internal` coverage 87.7%. | Done |
@@ -148,10 +148,11 @@ needs tests without host dependence (P1-8) and README updates.
 
 ## Recommended sequence
 
-1. **M1, green pipeline:** P0-1 to P0-5 are implemented. Commit and push
-   them, then confirm the CI and Docker workflows pass. Exercise CD with a test
-   tag on a fork, or with the first real tag.
-2. **M2, testable core:** P1-1, P1-8, P1-2, P1-5, P1-3, P1-4, P1-7, P1-6, plus P1-9 and P1-11. Implemented 2026-09-27. Awaiting a green Windows CI run. Next: P1-10.
+1. **M1, green pipeline:** Done except P0-3. CI, Docker, and Security are green
+   on `0d3b91a`. The CD workflow (P0-3) runs only on a `v*` tag, so it is
+   exercised by the first release tag or a test tag on a fork.
+2. **M2, testable core:** Done. P1-1 to P1-9 and P1-11 shipped in `0d3b91a`, and CI
+   is green on all three operating systems. Next: P1-10.
 3. **M3, hardened:** P2-1 through P2-4, and P2-5 with P4-1.
 4. **M4, first tagged release (`v0.1.0`):** P4-1, P4-2, P2-6, P3-1.
 5. **M5, depth:** P3-2 through P3-6, then P3-7 and P3-8 per decisions.
