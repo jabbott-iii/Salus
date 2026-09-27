@@ -67,6 +67,8 @@ go vet ./...
 go test ./...
 go test -race ./...                # required for concurrency-related changes
 golangci-lint run                  # CI uses golangci-lint v2.13.2
+GOOS=darwin golangci-lint run ./...   # CI also lints on macOS
+GOOS=windows golangci-lint run ./...  # ...and on Windows
 go mod tidy && git diff --exit-code   # CI fails if go.mod/go.sum drift
 ```
 

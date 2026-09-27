@@ -94,3 +94,19 @@ reconstructed from commit messages and diffs, not first-hand records.
   (`salus-phase0-workflows.patch`, applied with `git apply`), because the
   remote session cannot write `.github/workflows/`. Uncommitted at the time
   of writing.
+
+## 2026-09-27: macOS/Windows lint failure fixed (threshold helpers build-constrained)
+
+- Change: Moved the resource-threshold defaults, `orDefault`, and the six
+  `CheckOptions` threshold accessors from `internal/health.go` into the new
+  `internal/health-thresholds.go`, constrained to `//go:build linux`. No
+  behavior change on Linux. Added cross-OS lint commands to
+  `CONTRIBUTING.md` and the matching rule to `intel/maint.md`.
+- Files: `internal/health.go`, `internal/health-thresholds.go`,
+  `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/plan.md`
+- Reason / reference: CI run 36305462889 on `586dfe9` failed on macOS at
+  `golangci-lint` (7 `unused` findings), and Windows was cancelled by
+  fail-fast. Those helpers were used only by the Linux resource checks, so
+  they were dead code on other targets. The affected code and the
+  golangci-lint version (v2.13.2) both predate Phase 0. Earlier CI runs were
+  not inspected. Uncommitted at the time of writing.

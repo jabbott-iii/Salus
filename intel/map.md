@@ -18,8 +18,9 @@ Salus/
 ├── internal/                   Single Go package holding all application logic
 │   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show
 │   ├── logic-cli_test.go       Command write-error propagation tests
-│   ├── health.go               Check keys, options, thresholds, registry, RunChecks,
+│   ├── health.go               Check keys, options, thresholdStatus, registry, RunChecks,
 │   │                           docker / kubernetes / service-uptime / misconfig checks
+│   ├── health-thresholds.go    Threshold defaults + accessors (//go:build linux until P3-7)
 │   ├── health-resources_linux.go   disk (statfs), memory (/proc/meminfo),
 │   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
 │   ├── health-resources_other.go   Non-Linux stubs returning WARN

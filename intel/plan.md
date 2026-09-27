@@ -57,6 +57,17 @@ Goal: CI, Docker, and CD workflows build, smoke-test, and release Salus.
 Not run: GitHub Actions itself, the Docker image build, macOS and Windows
 execution, and a tag-triggered release.
 
+CI run #44 (`586dfe9`, run 36305462889): ubuntu passed, including the new
+smoke step. macOS failed at `golangci-lint` with 7 `unused` findings in
+`internal/health.go` (`orDefault` and the six threshold accessors), and
+Windows was cancelled by fail-fast. Those helpers are referenced only from
+`health-resources_linux.go`, and neither they nor the golangci-lint version
+changed in Phase 0 (earlier runs were not inspected). Reproduced locally with
+golangci-lint v2.13.2 for `GOOS=darwin` and `GOOS=windows`. Fixed by moving
+them into `internal/health-thresholds.go` (`//go:build linux`). After the
+move, all three targets report 0 issues. The macOS and Windows smoke steps
+have not yet run in CI.
+
 Delivery note: the remote session cannot write `.github/workflows/`, so the
 P0-2 to P0-4 edits were handed over as `salus-phase0-workflows.patch`,
 checked with `git apply --check` against `460a24b`, with CRLF line endings
@@ -113,7 +124,7 @@ needs tests without host dependence (P1-8) and README updates.
 | P3-4 | Broader misconfiguration detection: kubeconfig permissions, Docker socket permissions, world-writable `PATH` entries, and DB file mode (with P2-2). | Every rule gets a stable identifier in the message and a test. | Proposed |
 | P3-5 | Machine-readable history: `jobs list --json` and `jobs show --json`. | Additive. Does not change the `check run --json` array shape. | Proposed |
 | P3-6 | Job retention: a way to prune old jobs (for example `jobs prune --older-than 30d`). | Prevents unbounded DB growth under cron. | Proposed |
-| P3-7 | macOS and Windows resource checks (Q-005: approved). macOS: `statfs`, sysctl (`hw.memsize`, `vm.loadavg`, `kern.boottime`, page counts). Windows: kernel32 (`GetDiskFreeSpaceExW`, `GlobalMemoryStatusEx`, `GetTickCount64`). Windows has no load average, so CPU load needs its own definition (for example utilization sampled with `GetSystemTimes`), recorded in `maint.md`. | Try the standard library `syscall` package first. Adopt `golang.org/x/sys` only if it proves insufficient, and record why. Then update `NOTICE`. Unsupported-platform stubs remain for other OSes. | Ready |
+| P3-7 | macOS and Windows resource checks (Q-005: approved). macOS: `statfs`, sysctl (`hw.memsize`, `vm.loadavg`, `kern.boottime`, page counts). Windows: kernel32 (`GetDiskFreeSpaceExW`, `GlobalMemoryStatusEx`, `GetTickCount64`). Windows has no load average, so CPU load needs its own definition (for example utilization sampled with `GetSystemTimes`), recorded in `maint.md`. | Try the standard library `syscall` package first. Adopt `golang.org/x/sys` only if it proves insufficient, and record why. Then update `NOTICE`. Widen the `//go:build linux` constraint on `internal/health-thresholds.go` to the new platforms. Unsupported-platform stubs remain for other OSes. | Ready |
 | P3-8 | Multiple services in one run (for example a repeatable `--service`). | Output and storage use one outcome per key today. Needs a design for per-service keys. | Proposed |
 
 ## Phase 4: Documentation and developer experience

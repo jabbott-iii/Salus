@@ -83,42 +83,9 @@ type CheckOptions struct {
 	CommandTimeout time.Duration
 }
 
-// Default thresholds applied when the corresponding CheckOptions field is unset (<= 0).
-const (
-	defaultDiskWarnPercent = 80.0
-	defaultDiskFailPercent = 90.0
-	defaultMemWarnPercent  = 80.0
-	defaultMemFailPercent  = 90.0
-	defaultLoadWarnPercent = 80.0
-	defaultLoadFailPercent = 100.0
-	defaultCommandTimeout  = 3 * time.Second
-)
-
-func orDefault(v, def float64) float64 {
-	if v <= 0 {
-		return def
-	}
-	return v
-}
-
-func (o CheckOptions) diskWarnPercent() float64 {
-	return orDefault(o.DiskWarnPercent, defaultDiskWarnPercent)
-}
-func (o CheckOptions) diskFailPercent() float64 {
-	return orDefault(o.DiskFailPercent, defaultDiskFailPercent)
-}
-func (o CheckOptions) memWarnPercent() float64 {
-	return orDefault(o.MemWarnPercent, defaultMemWarnPercent)
-}
-func (o CheckOptions) memFailPercent() float64 {
-	return orDefault(o.MemFailPercent, defaultMemFailPercent)
-}
-func (o CheckOptions) loadWarnPercent() float64 {
-	return orDefault(o.LoadWarnPercent, defaultLoadWarnPercent)
-}
-func (o CheckOptions) loadFailPercent() float64 {
-	return orDefault(o.LoadFailPercent, defaultLoadFailPercent)
-}
+// defaultCommandTimeout applies when CheckOptions.CommandTimeout is unset (<= 0).
+// Resource threshold defaults live in health-thresholds.go.
+const defaultCommandTimeout = 3 * time.Second
 
 func (o CheckOptions) commandTimeout() time.Duration {
 	if o.CommandTimeout <= 0 {

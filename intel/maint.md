@@ -28,7 +28,7 @@ HTTP interface is ever added.
 |---|---|---|
 | Entry point | `main.go`, `database_path.go`, `version.go` | Resolve DB path from `SALUS_DB_PATH`, open DB, seed catalog, build the root command with the build `version` (`--version`), and execute it. |
 | CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`), flag parsing, exit-code mapping. |
-| Checks | `internal/health.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
+| Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
 | Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code mapping. |
 | Persistence | `internal/database.go`, `internal/scan-store.go`, `internal/seed.go` | GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
 | Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only), scheduled for removal because Salus is CLI-only (Q-001, `plan.md` P5-2). |
@@ -109,8 +109,15 @@ authorization plus README and `history.md` updates:
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
   registry references.
-- Threshold defaults are constants in `health.go`; zero or negative option
-  values fall back to the defaults via `orDefault`.
+- Threshold defaults and their accessors live in `health-thresholds.go`.
+  Zero or negative option values fall back to the defaults via `orDefault`.
+  The file is constrained to `//go:build linux` because only the Linux
+  resource checks use it. Widen the constraint when macOS and Windows checks
+  are added (P3-7).
+- Unexported code referenced only from platform-specific files must carry
+  the same build constraint. Otherwise golangci-lint's `unused` check fails
+  on the other operating systems (this broke the macOS CI job on
+  2026-09-27). Lint for all three targets (see section 6).
 
 ### Adding a new check (checklist)
 1. Add a `key...` constant and append it to `AllCheckKeys` in `health.go`.
@@ -154,6 +161,10 @@ authorization plus README and `history.md` updates:
 ## 6. Testing expectations
 
 - `go test ./...` must pass on Linux, macOS, and Windows (CI matrix).
+- `golangci-lint run ./...` must pass for every CI target. From Linux, check
+  the other targets with `GOOS=darwin golangci-lint run ./...` and
+  `GOOS=windows golangci-lint run ./...` (CGO is off by default when cross
+  targeting, which is enough for linting).
 - New tests must be deterministic and must not depend on Docker, Kubernetes,
   systemd, or specific host resource levels. Existing
   `TestRunChecksDefaultsToAllChecks` executes real checks and only asserts on
