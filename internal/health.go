@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"runtime"
 	"strings"
 	"time"
@@ -156,20 +157,29 @@ var checkRegistry = map[string]checkFunc{
 	keyMisconfig:     checkMisconfiguration,
 }
 
+// ValidateCheckKeys returns an error for the first key that is not a built-in check.
+func ValidateCheckKeys(keys []string) error {
+	for _, key := range keys {
+		if _, ok := checkRegistry[key]; !ok {
+			return fmt.Errorf("unknown check %q", key)
+		}
+	}
+	return nil
+}
+
 // RunChecks executes the given check keys (or all built-in checks when keys is empty)
 // and returns their outcomes in the order requested.
 func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 	if len(keys) == 0 {
 		keys = AllCheckKeys
 	}
+	if err := ValidateCheckKeys(keys); err != nil {
+		return nil, err
+	}
 
 	outcomes := make([]CheckOutcome, 0, len(keys))
 	for _, key := range keys {
-		fn, ok := checkRegistry[key]
-		if !ok {
-			return nil, fmt.Errorf("unknown check %q", key)
-		}
-		outcomes = append(outcomes, fn(opts))
+		outcomes = append(outcomes, checkRegistry[key](opts))
 	}
 	return outcomes, nil
 }
@@ -221,11 +231,16 @@ func checkServiceUptime(opts CheckOptions) CheckOutcome {
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: "service uptime check requires systemd (Linux only)", Duration: time.Since(start)}
 	}
 
+	if !validUnitName(name) {
+		return CheckOutcome{Key: keyServiceUptime, Status: StatusFail, Message: fmt.Sprintf("invalid service name %q: use a systemd unit name such as nginx or nginx.service", name), Duration: time.Since(start)}
+	}
+
 	if !opts.hasTool("systemctl") {
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: "systemctl not found in PATH", Duration: time.Since(start)}
 	}
 
-	out, err := opts.command("systemctl", "is-active", name)
+	// "--" ends option parsing, so the name can never be read as a systemctl flag.
+	out, err := opts.command("systemctl", "is-active", "--", name)
 	// Only the first line is used so messages stay single-line in reports.
 	state := firstLine(string(out), err)
 
@@ -237,6 +252,15 @@ func checkServiceUptime(opts CheckOptions) CheckOutcome {
 	default:
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusFail, Message: fmt.Sprintf("service %q is not active (%s)", name, state), Duration: time.Since(start)}
 	}
+}
+
+// unitNamePattern matches systemd unit names: letters, digits, and ":-_.\@",
+// not starting with "-" (which systemctl would parse as an option; SEC-001).
+var unitNamePattern = regexp.MustCompile(`^[A-Za-z0-9:_.\\@][A-Za-z0-9:_.\\@-]*$`)
+
+// validUnitName reports whether name is an acceptable --service value.
+func validUnitName(name string) bool {
+	return len(name) <= 255 && unitNamePattern.MatchString(name)
 }
 
 func checkProcessUptime(start time.Time) CheckOutcome {
@@ -255,12 +279,15 @@ func checkMisconfiguration(opts CheckOptions) CheckOutcome {
 		warnings = append(warnings, "HOME environment variable is not set")
 	}
 
-	// On Windows, Go reports 0666 for every writable file (ACLs are not mode
-	// bits), so this POSIX permission test would always warn there.
-	if dbPath := os.Getenv(DatabasePathEnv); dbPath != "" && runtime.GOOS != "windows" {
-		if info, err := os.Stat(dbPath); err == nil {
-			if info.Mode().Perm()&0o022 != 0 {
-				warnings = append(warnings, fmt.Sprintf("%s is writable by group/other", dbPath))
+	// Checks the database Salus actually uses (SALUS_DB_PATH or the per-user
+	// default). On Windows, Go reports 0666 for every writable file (ACLs are
+	// not mode bits), so this POSIX permission test would always warn there.
+	if dbPath, err := DatabasePath(); err == nil && runtime.GOOS != "windows" {
+		if file, ok := databaseFile(dbPath); ok {
+			if info, err := os.Stat(file); err == nil {
+				if perm := info.Mode().Perm(); perm&0o077 != 0 {
+					warnings = append(warnings, fmt.Sprintf("%s is accessible by group/other (mode %04o, want 0600; run chmod 600 on it)", file, perm))
+				}
 			}
 		}
 	}

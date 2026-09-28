@@ -20,9 +20,28 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
+
+// maxStoredMessageLen bounds each persisted result message in bytes, so
+// verbose tool output cannot grow the database without limit (SEC-004).
+const maxStoredMessageLen = 1024
+
+// truncateMessage shortens msg to at most maxLen bytes on a UTF-8 boundary,
+// marking the cut with "...".
+func truncateMessage(msg string, maxLen int) string {
+	if len(msg) <= maxLen {
+		return msg
+	}
+	const marker = "..."
+	cut := maxLen - len(marker)
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut] + marker
+}
 
 // ListFeatures returns every seeded Feature along with its Category, ordered by category then name.
 func ListFeatures(db *Database) ([]Feature, error) {
@@ -74,7 +93,7 @@ func RecordScan(db *Database, startedAt time.Time, outcomes []CheckOutcome) (Sca
 				FeatureID:  feature.ID,
 				Key:        outcome.Key,
 				Status:     string(outcome.Status),
-				Message:    outcome.Message,
+				Message:    truncateMessage(outcome.Message, maxStoredMessageLen),
 				DurationMs: outcome.Duration.Milliseconds(),
 				CreatedAt:  time.Now(),
 			}

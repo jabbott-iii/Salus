@@ -18,8 +18,10 @@ package internal
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func newSeededTestDatabase(t *testing.T) *Database {
@@ -115,5 +117,44 @@ func TestListScanJobsOrdersNewestFirst(t *testing.T) {
 	}
 	if len(limited) != 1 {
 		t.Fatalf("ListScanJobs(limit=1) returned %d jobs, want 1", len(limited))
+	}
+}
+
+func TestRecordScanBoundsStoredMessages(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	long := strings.Repeat("é", maxStoredMessageLen) // 2 bytes per rune
+
+	job, err := RecordScan(db, time.Time{}, []CheckOutcome{{Key: keyMisconfig, Status: StatusWarn, Message: long}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	_, results, err := GetScanJob(db, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanJob() error = %v", err)
+	}
+
+	got := results[0].Message
+	if len(got) > maxStoredMessageLen || !utf8.ValidString(got) || !strings.HasSuffix(got, "...") {
+		t.Errorf("stored message: %d bytes, valid UTF-8 %v, suffix %q; want <= %d bytes, valid, ending in ...",
+			len(got), utf8.ValidString(got), got[max(0, len(got)-3):], maxStoredMessageLen)
+	}
+}
+
+func TestTruncateMessage(t *testing.T) {
+	tests := []struct {
+		msg  string
+		max  int
+		want string
+	}{
+		{msg: "short", max: 10, want: "short"},
+		{msg: "exactly10!", max: 10, want: "exactly10!"},
+		{msg: "0123456789abc", max: 10, want: "0123456..."},
+		{msg: "ééééé", max: 8, want: "éé..."}, // never splits a multi-byte rune
+	}
+
+	for _, tt := range tests {
+		if got := truncateMessage(tt.msg, tt.max); got != tt.want {
+			t.Errorf("truncateMessage(%q, %d) = %q, want %q", tt.msg, tt.max, got, tt.want)
+		}
 	}
 }

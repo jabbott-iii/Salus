@@ -4,8 +4,8 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-27 (against commit `0d3b91a`; CI, Docker, and
-Security workflows green). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
+Last reviewed: 2026-09-27 (against `231487a`, tagged v1.0.0, plus uncommitted
+P1-10/P2-1/P2-2 changes). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
 `In Progress`, `Blocked`, `Awaiting CI` (implemented and validated locally,
@@ -78,7 +78,7 @@ workflow files in the repository still contain the old "munus" steps.
 |---|---|---|---|
 | P0-1 | Add version reporting: `var version = "dev"` in `version.go`, set on the root command's `Version` field so `-X main.version=` takes effect. | `salus --version` prints the injected version. A unit test covers it. | Done |
 | P0-2 | Fix the `ci.yml` smoke step: binary `salus-ci`, `SALUS_DB_PATH`, commands `--version`, `check list`, `check run --only misconfig` (accept exit 0 or 1, fail on 2 or higher; see P1-5 for Windows), then `jobs show 1 \| grep misconfig >/dev/null`. (`grep -q` is avoided under `pipefail`: it can exit early and turn the writer's broken pipe into a failure.) | The CI matrix is green on ubuntu, macOS, and Windows. CI #45 (`4995446`): ubuntu and macOS green. Windows failed in tests (unclosed DB, fixed by P1-4). Awaiting the next Windows run. CI #46 (`0d3b91a`, run 36353006078) is green on ubuntu, macOS, and Windows. The smoke step passed on all three. | Done |
-| P0-3 | Fix `cd.yml`: `munus` → `salus` in artifact names, comments, env var, and smoke commands (same as P0-2). Q-003 decided: archives are canonical, and the README install section now matches. The smoke step also checks that `--version` output equals `salus version <tag>`. | A tag on a fork or test branch produces six `salus_*` archives plus `checksums.txt`. Every smoke-enabled target passes. | Awaiting CI |
+| P0-3 | Fix `cd.yml`: `munus` → `salus` in artifact names, comments, env var, and smoke commands (same as P0-2). Q-003 decided: archives are canonical, and the README install section now matches. The smoke step also checks that `--version` output equals `salus version <tag>`. | A tag on a fork or test branch produces six `salus_*` archives plus `checksums.txt`. Every smoke-enabled target passes. Verified by the v1.0.0 release (tag at `231487a`): six `salus_*` archives plus `checksums.txt` published. | Done |
 | P0-4 | Fix `docker.yml`: image tag `salus:<sha>`, volume `salus-smoke`, commands `check run --only misconfig` and `jobs show 1`. The inaccurate non-root comment was replaced with a pointer to SEC-002. `--version` added to the smoke step. | The Docker workflow is green on a PR to `main`. The Docker workflow is green on `0d3b91a` (run 36353006162). | Done |
 | P0-5 | Restore `NOTICE` third-party entries to match `go.mod`: cobra (Apache-2.0), pflag (BSD-3-Clause), mousetrap (Apache-2.0), gorm (MIT), gorm sqlite driver (MIT), go-sqlite3 (MIT, bundles public-domain SQLite), inflection (MIT), now (MIT), x/text (BSD-3-Clause). | `NOTICE` lists every module linked into the binary, and nothing else. Line endings (CRLF) preserved. | Done |
 
@@ -95,7 +95,7 @@ workflow files in the repository still contain the old "munus" steps.
 | P1-7 | Keep outcome messages single-line. `service-uptime` currently embeds the full combined `systemctl` output. | A test with multi-line fake output yields a single-line message. Done: `firstLine` for `systemctl` output, covered by a multi-line test. The `docker-status` success message can still be multi-line (see `notes.md`). | Done |
 | P1-8 | Make checks testable without host state: inject a command runner (`exec` wrapper) and file readers. Add fixture-based parser tests for `/proc/meminfo`, `/proc/loadavg`, and `/proc/uptime`, and fake-runner tests for docker, kubectl, and systemctl paths. Stop `TestRunChecksDefaultsToAllChecks` from executing real CLIs. | No test shells out to real `docker`, `kubectl`, or `systemctl`. `internal` coverage is above 80%. Done: `lookPath`/`runCommand` seams on `CheckOptions`, `fakeToolOptions`, and `parseMeminfo`/`parseLoadAverage`/`parseUptime` fixture tests. `internal` coverage 87.7%. | Done |
 | P1-9 | Use a distinct exit code for operational errors (Q-004: approved). Proposed value `3`, for any error that prevents a complete run: bad flags, unknown `--only` key, database failure. Builds on P1-1. | Tests cover exit code 3 for each error class. README exit-code section, `maint.md` contracts, and `history.md` updated. Smoke steps already tolerate only 0 and 1, so they catch 3. Done: `ExitCodeError = 3` and `ExitCode`. `TestRunExitCodes` covers unknown flag, unknown command or subcommand, extra argument, unknown check, invalid and missing job id. `TestRunDatabaseInitFailureIsOperationalError` covers DB init failure. | Done |
-| P1-10 | Move the default database to a per-user data directory (Q-002: approved) and open it only for commands that need it, not `--help`, `--version`, `completion`, or `check run --no-save`. Proposed locations: Linux `$XDG_DATA_HOME/salus/salus.db` (fallback `~/.local/share/salus/salus.db`), macOS `~/Library/Application Support/salus/salus.db`, Windows `%LocalAppData%\salus\salus.db`. `SALUS_DB_PATH` keeps overriding (the container image sets it). Create the directory `0700` and the file `0600` (SEC-004). Document that an existing `./salus.db` is no longer read by default. | Running `salus --help` in an empty directory creates no file. Per-OS path resolution is unit-tested. README configuration is updated. | Ready |
+| P1-10 | Move the default database to a per-user data directory (Q-002: approved) and open it only for commands that need it, not `--help`, `--version`, `completion`, or `check run --no-save`. Proposed locations: Linux `$XDG_DATA_HOME/salus/salus.db` (fallback `~/.local/share/salus/salus.db`), macOS `~/Library/Application Support/salus/salus.db`, Windows `%LocalAppData%\salus\salus.db`. `SALUS_DB_PATH` keeps overriding (the container image sets it). Create the directory `0700` and the file `0600` (SEC-004). Document that an existing `./salus.db` is no longer read by default. | Running `salus --help` in an empty directory creates no file. Per-OS path resolution is unit-tested. README configuration is updated. Implemented 2026-09-27 (after v1.0.0): `internal.DatabasePath`/`DefaultDatabasePath` (with an `os/user` fallback when `HOME` is unset), a `DatabaseOpener` passed to commands, `main.run` opening at most once, and 0700/0600 creation. `TestRunOpensDatabaseOnlyWhenNeeded` and `TestRunUsesPerUserDefaultDatabase` cover it. Upgrade notes are in the README. | Awaiting CI |
 | P1-11 | Reduce error noise. Cobra's error and usage printing is silenced at the root, and `main.run` writes `Error: …` plus `Run '<cmd> --help' for usage.` to stderr. GORM's logger is silenced. Group commands reject unknown subcommands, and leaf commands declare `Args`. | Errors never reach stdout (asserted for every error case in `TestRunExitCodes`). `jobs show 999` prints one error line to stderr and exits 3. `salus check rn` exits 3 with a suggestion. The acceptance criterion changed from "flag errors still show usage" to a `--help` hint for every error. This also fixes a regression found in review: usage text went to stdout once `run` set the output writer. | Done |
 
 ## Phase 2: Security hardening
@@ -104,8 +104,8 @@ Order by risk and effort. Update `cybersec.md` status as each item moves.
 
 | ID | Work | Depends on | Status |
 |---|---|---|---|
-| P2-1 | SEC-001: validate `--service` and pass `--` to `systemctl`. | P1-8 (runner injection makes the test clean) | Proposed |
-| P2-2 | SEC-004: create the DB file with `0600`, check the effective DB path in `misconfig` (including read bits), and bound message length. | P1-3, P1-5 | Proposed |
+| P2-1 | SEC-001: validate `--service` and pass `--` to `systemctl`. | P1-8 (runner injection makes the test clean) Implemented 2026-09-27. See SEC-001 resolution. | Awaiting CI |
+| P2-2 | SEC-004: create the DB file with `0600`, check the effective DB path in `misconfig` (including read bits), and bound message length. | P1-3, P1-5 Implemented 2026-09-27 together with P1-10. See SEC-004 resolution. | Awaiting CI |
 | P2-3 | SEC-002 and SEC-003: non-root container user, digest-pinned base images, `.dockerignore`. | P0-4 | Proposed |
 | P2-4 | SEC-005: `govulncheck` in CI and `.github/dependabot.yml` (gomod, github-actions, docker). gosec stays non-blocking (Q-009), and that policy is recorded in `maint.md`. | none | Proposed |
 | P2-5 | SEC-007: README container guidance. | P4-1 | Proposed |
@@ -148,11 +148,15 @@ needs tests without host dependence (P1-8) and README updates.
 
 ## Recommended sequence
 
-1. **M1, green pipeline:** Done except P0-3. CI, Docker, and Security are green
-   on `0d3b91a`. The CD workflow (P0-3) runs only on a `v*` tag, so it is
-   exercised by the first release tag or a test tag on a fork.
+1. **M1, green pipeline:** Done. CI, Docker, and Security are green on
+   `0d3b91a`, and the CD workflow (P0-3) published v1.0.0 from `231487a`.
 2. **M2, testable core:** Done. P1-1 to P1-9 and P1-11 shipped in `0d3b91a`, and CI
-   is green on all three operating systems. Next: P1-10.
-3. **M3, hardened:** P2-1 through P2-4, and P2-5 with P4-1.
-4. **M4, first tagged release (`v0.1.0`):** P4-1, P4-2, P2-6, P3-1.
+   is green on all three operating systems. P1-10 is implemented and awaiting CI.
+3. **M3, hardened:** P2-1 and P2-2 are implemented and awaiting CI. Next: P2-3
+   (Dockerfile and `.dockerignore`) and P2-4 (govulncheck and Dependabot; needs
+   a workflow patch), then P2-5 with P4-1.
+4. **M4, release hardening:** v1.0.0 was released on 2026-09-27 (before M3).
+   Ship P1-10, P2-1, and P2-2 as the next release with the README upgrade notes
+   (a minor or major bump is the maintainer's call; see `notes.md`). Then P4-1,
+   P4-2, P2-6, and P3-1.
 5. **M5, depth:** P3-2 through P3-6, then P3-7 and P3-8 per decisions.

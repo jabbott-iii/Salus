@@ -49,8 +49,9 @@ CGO_ENABLED=1 go build -o salus .
 ./salus check run
 ```
 
-By default Salus creates `salus.db` in the current working directory. To keep
-development data elsewhere, set `SALUS_DB_PATH`:
+By default Salus stores its database in a per-user data directory (see
+Configuration in `README.md`). To keep development data separate, set
+`SALUS_DB_PATH`:
 
 ```bash
 SALUS_DB_PATH="$(mktemp -d)/salus.db" ./salus check run --only misconfig

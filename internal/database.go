@@ -19,18 +19,14 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"time"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
-)
-
-const (
-	// DatabasePathEnv is the environment variable that sets the sqlite database path.
-	DatabasePathEnv = "SALUS_DB_PATH"
-	// DefaultDatabasePath is used when DatabasePathEnv is unset or empty.
-	DefaultDatabasePath = "salus.db"
 )
 
 //--------------------------------------------------core-------------------------------------------------------------------------------------------------//
@@ -41,9 +37,13 @@ type Database struct {
 }
 
 // NewDatabase opens (or creates) the sqlite file and runs schema migrations.
+// A new file and any missing parent directories are created owner-only.
 func NewDatabase(path string) (*Database, error) {
 	if path == "" {
-		path = DefaultDatabasePath
+		return nil, errors.New("database path is empty")
+	}
+	if err := createDatabaseFile(path); err != nil {
+		return nil, err
 	}
 
 	// GORM's default logger writes to stdout (corrupting --json output) and
@@ -51,7 +51,7 @@ func NewDatabase(path string) (*Database, error) {
 	// callers and reported by the CLI instead.
 	conn, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite database: %w", err)
+		return nil, fmt.Errorf("open sqlite database %s: %w", path, err)
 	}
 
 	if err := conn.AutoMigrate(
@@ -61,10 +61,52 @@ func NewDatabase(path string) (*Database, error) {
 		&ScanResult{},
 	); err != nil {
 		db := &Database{conn: conn}
-		return nil, errors.Join(fmt.Errorf("auto-migrate schema: %w", err), db.Close())
+		return nil, errors.Join(fmt.Errorf("auto-migrate schema in %s: %w", path, err), db.Close())
 	}
 
 	return &Database{conn: conn}, nil
+}
+
+// OpenDatabase opens the database at path and seeds the built-in check catalog.
+func OpenDatabase(path string) (*Database, error) {
+	db, err := NewDatabase(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := EnsureDefaultFeatures(db); err != nil {
+		return nil, errors.Join(fmt.Errorf("seed default features: %w", err), db.Close())
+	}
+	return db, nil
+}
+
+// createDatabaseFile creates a missing database file (mode 0600) and its
+// missing parent directories (mode 0700) before SQLite opens it, so a new
+// database is never readable by other users (SEC-004). An existing file is not
+// touched: it keeps its mode (the misconfig check reports on it) and may be
+// read-only. In-memory databases and "file:" URIs are left to SQLite.
+func createDatabaseFile(path string) error {
+	file, ok := databaseFile(path)
+	if !ok {
+		return nil
+	}
+	if _, err := os.Stat(file); !errors.Is(err, fs.ErrNotExist) {
+		// It exists, or cannot be inspected; SQLite reports any real problem.
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		return fmt.Errorf("create database directory: %w", err)
+	}
+	f, err := os.OpenFile(file, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, fs.ErrExist) {
+		return nil // created concurrently by another process
+	}
+	if err != nil {
+		return fmt.Errorf("create database file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("create database file: %w", err)
+	}
+	return nil
 }
 
 // Conn exposes the raw gorm handle for advanced queries/transactions.

@@ -19,6 +19,7 @@ package internal
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -79,11 +80,15 @@ func unsetEnv(t *testing.T, key string) {
 	})
 }
 
-// isolateMisconfigEnv gives the misconfig check a clean, passing environment.
+// isolateMisconfigEnv gives the misconfig check a clean, passing environment:
+// no SALUS_DB_PATH, and a per-user default database location in a temp dir
+// that does not exist yet.
 func isolateMisconfigEnv(t *testing.T) {
 	t.Helper()
 
 	t.Setenv(DatabasePathEnv, "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
 	if runtime.GOOS != "windows" {
 		t.Setenv("HOME", t.TempDir())
 	}
@@ -180,7 +185,7 @@ func TestCheckKubernetesStatus(t *testing.T) {
 }
 
 func TestCheckServiceUptimeWithService(t *testing.T) {
-	isActive := "systemctl is-active nginx"
+	isActive := "systemctl is-active -- nginx"
 
 	if runtime.GOOS != "linux" {
 		opts, calls := fakeToolOptions(t, []string{"systemctl"}, nil)
@@ -283,6 +288,7 @@ func TestCheckMisconfigurationDatabasePermissions(t *testing.T) {
 		warn bool
 	}{
 		{name: "owner only", mode: 0o600, warn: false},
+		{name: "group readable", mode: 0o640, warn: true},
 		{name: "group and other writable", mode: 0o666, warn: true},
 	}
 
@@ -303,7 +309,8 @@ func TestCheckMisconfigurationDatabasePermissions(t *testing.T) {
 			// file), so the permission test is skipped there and never warns.
 			wantWarn := tt.warn && runtime.GOOS != "windows"
 			if wantWarn {
-				assertOutcome(t, got, keyMisconfig, StatusWarn, path+" is writable by group/other")
+				want := fmt.Sprintf("%s is accessible by group/other (mode %04o, want 0600; run chmod 600 on it)", path, tt.mode)
+				assertOutcome(t, got, keyMisconfig, StatusWarn, want)
 				return
 			}
 			assertOutcome(t, got, keyMisconfig, StatusPass, "no common misconfigurations detected")
@@ -327,6 +334,74 @@ func TestFirstLine(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := firstLine(tt.output, tt.err); got != tt.want {
 				t.Errorf("firstLine() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckMisconfigurationChecksDefaultDatabasePath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX permission bits are not checked on Windows")
+	}
+	isolateMisconfigEnv(t)
+
+	path, err := DefaultDatabasePath()
+	if err != nil {
+		t.Fatalf("DefaultDatabasePath() error = %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatalf("create database directory: %v", err)
+	}
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatalf("create database file: %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("chmod database file: %v", err)
+	}
+
+	want := path + " is accessible by group/other (mode 0644, want 0600; run chmod 600 on it)"
+	assertOutcome(t, checkMisconfiguration(CheckOptions{}), keyMisconfig, StatusWarn, want)
+}
+
+func TestValidUnitName(t *testing.T) {
+	tests := []struct {
+		name  string
+		valid bool
+	}{
+		{"nginx", true},
+		{"nginx.service", true},
+		{"getty@tty1.service", true},
+		{`systemd-fsck@dev-disk-by\x2duuid.service`, true},
+		{"--host=user@example.invalid", false},
+		{"-H", false},
+		{"", false},
+		{"nginx;reboot", false},
+		{"two words", false},
+		{"$(id)", false},
+		{strings.Repeat("a", 256), false},
+	}
+
+	for _, tt := range tests {
+		if got := validUnitName(tt.name); got != tt.valid {
+			t.Errorf("validUnitName(%q) = %v, want %v", tt.name, got, tt.valid)
+		}
+	}
+}
+
+func TestCheckServiceUptimeRejectsInvalidNames(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service names are only used on Linux")
+	}
+
+	for _, name := range []string{"--host=user@example.invalid", "-H", "nginx;reboot"} {
+		t.Run(name, func(t *testing.T) {
+			opts, calls := fakeToolOptions(t, []string{"systemctl"}, nil)
+			opts.ServiceName = name
+
+			want := fmt.Sprintf("invalid service name %q: use a systemd unit name such as nginx or nginx.service", name)
+			assertOutcome(t, checkServiceUptime(opts), keyServiceUptime, StatusFail, want)
+			if len(*calls) != 0 {
+				t.Errorf("ran %q for an invalid service name", *calls)
 			}
 		})
 	}

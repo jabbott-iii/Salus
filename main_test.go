@@ -110,6 +110,54 @@ func TestRunPersistsJobsAcrossInvocations(t *testing.T) {
 	}
 }
 
+func TestRunOpensDatabaseOnlyWhenNeeded(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "never", "salus.db")
+	t.Setenv(internal.DatabasePathEnv, path)
+	if runtime.GOOS != "windows" {
+		t.Setenv("HOME", t.TempDir())
+	}
+
+	for _, args := range [][]string{
+		{"--version"},
+		{"--help"},
+		{"check"},
+		{"completion", "bash"},
+		{"check", "run", "--only", "misconfig", "--no-save", "--quiet"},
+	} {
+		var stdout, stderr bytes.Buffer
+		if got := run(args, &stdout, &stderr); got != internal.ExitCodePass {
+			t.Fatalf("run(%q) = %d, want 0 (stderr: %s)", args, got, stderr.String())
+		}
+		if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
+			t.Fatalf("run(%q) created %s (stat error %v), want no database", args, filepath.Dir(path), err)
+		}
+	}
+}
+
+func TestRunUsesPerUserDefaultDatabase(t *testing.T) {
+	t.Setenv(internal.DatabasePathEnv, "")
+	t.Setenv("XDG_DATA_HOME", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	t.Setenv("HOME", t.TempDir())
+	t.Chdir(t.TempDir())
+
+	var stdout, stderr bytes.Buffer
+	if got := run([]string{"check", "list"}, &stdout, &stderr); got != internal.ExitCodePass {
+		t.Fatalf("check list exit code = %d, want 0 (stderr: %s)", got, stderr.String())
+	}
+
+	want, err := internal.DefaultDatabasePath()
+	if err != nil {
+		t.Fatalf("DefaultDatabasePath() error = %v", err)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Errorf("database not created at the per-user default %s: %v", want, err)
+	}
+	if _, err := os.Stat("salus.db"); !os.IsNotExist(err) {
+		t.Errorf("salus.db created in the working directory (stat error %v)", err)
+	}
+}
+
 func TestRunDatabaseInitFailureIsOperationalError(t *testing.T) {
 	// A directory cannot be opened as a sqlite database file.
 	t.Setenv(internal.DatabasePathEnv, t.TempDir())

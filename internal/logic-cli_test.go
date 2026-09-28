@@ -32,6 +32,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// openerFor returns a DatabaseOpener that always yields db.
+func openerFor(db *Database) DatabaseOpener {
+	return func() (*Database, error) { return db, nil }
+}
+
 type failingWriter struct {
 	err error
 }
@@ -44,7 +49,7 @@ func TestCheckListCmdReturnsWriteError(t *testing.T) {
 	db := newSeededTestDatabase(t)
 	expectedErr := errors.New("write failed")
 
-	cmd := newCheckListCmd(db)
+	cmd := newCheckListCmd(openerFor(db))
 	cmd.SilenceUsage = true
 	cmd.SetOut(failingWriter{err: expectedErr})
 	cmd.SetErr(io.Discard)
@@ -63,7 +68,7 @@ func TestJobsListCmdReturnsWriteError(t *testing.T) {
 	}
 	expectedErr := errors.New("write failed")
 
-	cmd := newJobsListCmd(db)
+	cmd := newJobsListCmd(openerFor(db))
 	cmd.SilenceUsage = true
 	cmd.SetOut(failingWriter{err: expectedErr})
 	cmd.SetErr(io.Discard)
@@ -82,7 +87,7 @@ func TestJobsShowCmdReturnsWriteError(t *testing.T) {
 	}
 	expectedErr := errors.New("write failed")
 
-	cmd := newJobsShowCmd(db)
+	cmd := newJobsShowCmd(openerFor(db))
 	cmd.SilenceUsage = true
 	cmd.SetOut(failingWriter{err: expectedErr})
 	cmd.SetErr(io.Discard)
@@ -98,7 +103,7 @@ func TestJobsShowCmdReturnsWriteError(t *testing.T) {
 func executeCheckRun(t *testing.T, db *Database, args ...string) (string, string, error) {
 	t.Helper()
 
-	cmd := newCheckRunCmd(db)
+	cmd := newCheckRunCmd(openerFor(db))
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
 	cmd.SetErr(&stderr)
@@ -283,7 +288,7 @@ func TestRecordScanKeepsStartTime(t *testing.T) {
 func TestGroupCommandsRejectUnknownSubcommands(t *testing.T) {
 	db := newSeededTestDatabase(t)
 
-	for _, group := range []*cobra.Command{newCheckCmd(db), newJobsCmd(db)} {
+	for _, group := range []*cobra.Command{newCheckCmd(openerFor(db)), newJobsCmd(openerFor(db))} {
 		t.Run(group.Name(), func(t *testing.T) {
 			// Attach to a parent: a command executed as the root gets Cobra's
 			// own subcommand handling instead of runGroup.
@@ -312,5 +317,61 @@ func TestGroupCommandsRejectUnknownSubcommands(t *testing.T) {
 				t.Errorf("help output = %q, want the subcommand list", stdout.String())
 			}
 		})
+	}
+}
+
+func TestCheckRunNoSaveNeverOpensDatabase(t *testing.T) {
+	isolateMisconfigEnv(t)
+	openDB := func() (*Database, error) {
+		t.Error("check run --no-save opened the database")
+		return nil, errors.New("unexpected open")
+	}
+
+	cmd := newCheckRunCmd(openDB)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--only", keyMisconfig, "--no-save"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+}
+
+func TestCommandsReportDatabaseOpenErrors(t *testing.T) {
+	openErr := errors.New("disk on fire")
+	openDB := func() (*Database, error) { return nil, openErr }
+
+	commands := map[string]*cobra.Command{
+		"check list": newCheckListCmd(openDB),
+		"check run":  newCheckRunCmd(openDB),
+		"jobs list":  newJobsListCmd(openDB),
+		"jobs show":  newJobsShowCmd(openDB),
+	}
+	args := map[string][]string{"check run": {"--only", keyMisconfig}, "jobs show": {"1"}}
+
+	isolateMisconfigEnv(t)
+	for name, cmd := range commands {
+		t.Run(name, func(t *testing.T) {
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(append([]string{}, args[name]...))
+			if err := cmd.Execute(); !errors.Is(err, openErr) {
+				t.Fatalf("Execute() error = %v, want %v", err, openErr)
+			}
+		})
+	}
+}
+
+func TestCheckRunValidatesChecksBeforeOpeningDatabase(t *testing.T) {
+	openDB := func() (*Database, error) {
+		t.Error("check run opened the database for an invalid --only value")
+		return nil, errors.New("unexpected open")
+	}
+
+	cmd := newCheckRunCmd(openDB)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--only", "does-not-exist"})
+	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), `unknown check "does-not-exist"`) {
+		t.Fatalf("Execute() error = %v, want unknown check", err)
 	}
 }

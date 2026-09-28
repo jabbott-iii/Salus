@@ -32,13 +32,27 @@ func main() {
 // run's PASS/WARN/FAIL result, and internal.ExitCodeError for operational
 // errors. Returning instead of exiting lets the database close first.
 func run(args []string, stdout, stderr io.Writer) (code int) {
-	// sqlite db creation / use
-	db, err := internal.NewDatabase(databasePathFromEnv())
-	if err != nil {
-		_, _ = fmt.Fprintf(stderr, "Error: failed to initialize database: %v\n", err)
-		return internal.ExitCodeError
+	// The database is opened only when a command needs it, at most once.
+	var db *internal.Database
+	openDB := func() (*internal.Database, error) {
+		if db != nil {
+			return db, nil
+		}
+		path, err := internal.DatabasePath()
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize database: %w", err)
+		}
+		opened, err := internal.OpenDatabase(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to initialize database: %w", err)
+		}
+		db = opened
+		return db, nil
 	}
 	defer func() {
+		if db == nil {
+			return
+		}
 		if err := db.Close(); err != nil {
 			_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
 			if code == internal.ExitCodePass {
@@ -47,12 +61,7 @@ func run(args []string, stdout, stderr io.Writer) (code int) {
 		}
 	}()
 
-	if err := internal.EnsureDefaultFeatures(db); err != nil {
-		_, _ = fmt.Fprintf(stderr, "Error: failed to seed default features: %v\n", err)
-		return internal.ExitCodeError
-	}
-
-	rootCmd := newRootCmd(db)
+	rootCmd := newRootCmd(openDB)
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)

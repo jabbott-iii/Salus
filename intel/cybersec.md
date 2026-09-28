@@ -63,7 +63,8 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-001: Option injection through `--service` into `systemctl`
 
-- **Status:** Open
+- **Status:** In Progress (implemented and validated locally 2026-09-27;
+  close once merged with CI green)
 - **Affected component:** `internal/health.go`, `checkServiceUptime`
 - **Risk:** Low. The `--service` value is passed verbatim as an argument to
   `systemctl is-active <name>`. A value that starts with `-` is parsed as a
@@ -81,7 +82,16 @@ comment, and the current Code Scanning alert state on GitHub.
   `systemctl`, and that `nginx`, `nginx.service`, and `getty@tty1.service` are
   accepted. The gosec G204 finding for the command wrapper
   (`CheckOptions.command`) is reviewed and documented.
-- **Resolution:** None yet.
+- **Resolution:** Pending merge. `validUnitName` (in `internal/health.go`)
+  accepts only systemd unit-name characters (`A-Za-z0-9:_.\@-`), no leading
+  `-`, and at most 255 bytes. Invalid names return `FAIL` ("invalid service
+  name …") before `systemctl` is looked up or run. Valid names are passed as
+  `systemctl is-active -- <name>`. Validation evidence:
+  `TestValidUnitName`, `TestCheckServiceUptimeRejectsInvalidNames` (no command
+  runs), and `TestCheckServiceUptimeWithService` (argv includes `--`). gosec
+  v2.29.0 G204 on `CheckOptions.command` was reviewed: tool names are
+  constants, and the only user input is validated (see `notes.md`, gosec
+  baseline).
 
 ### SEC-002: Container image runs as root and base images are not digest-pinned
 
@@ -122,8 +132,9 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-004: SQLite database created with default permissions in the working directory
 
-- **Status:** Open
-- **Affected component:** `database_path.go`, `internal/database.go`
+- **Status:** In Progress (implemented and validated locally 2026-09-27;
+  close once merged with CI green)
+- **Affected component:** `internal/database-path.go`, `internal/database.go`
   (`NewDatabase`), `internal/health.go` (`checkMisconfiguration`)
 - **Risk:** Low. By default `salus.db` is created in whatever directory Salus
   runs from, with the process umask (commonly `0644`, so world-readable). It
@@ -144,7 +155,24 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** A unit test on Unix asserts that a newly created database
   has mode `0600`. A `misconfig` test with a `0644` database file returns
   `WARN`. A test asserts truncation of messages longer than the bound.
-- **Resolution:** None yet.
+- **Resolution:** Pending merge.
+  - New database files are created with `O_EXCL` and mode `0600`, and missing
+    parent directories with `0700`. Existing files are never modified, so
+    read-only databases still open.
+  - The default path is now per-user (P1-10).
+  - `misconfig` checks the effective file (`SALUS_DB_PATH` or the default,
+    with go-sqlite3 `?` parameters stripped) and warns on any group/other bit
+    (`0o077`), suggesting `chmod 600`.
+  - Stored messages are capped at 1024 bytes on a UTF-8 boundary.
+  - Evidence: `TestNewDatabaseCreatesOwnerOnlyFileAndDirectories`,
+    `TestNewDatabaseKeepsExistingFileMode`,
+    `TestNewDatabaseOpensReadOnlyFile`,
+    `TestNewDatabaseStripsConnectionParameters`,
+    `TestCheckMisconfigurationDatabasePermissions` (0600 pass, 0640 and 0666
+    warn), `TestCheckMisconfigurationChecksDefaultDatabasePath`,
+    `TestRecordScanBoundsStoredMessages`, and `TestTruncateMessage`. The
+    permission tests were also run as an unprivileged user (`nobody`). Windows
+    remains out of scope for mode bits (see above).
 
 ### SEC-005: No dependency vulnerability scanning or update automation
 

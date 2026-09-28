@@ -12,8 +12,6 @@ changes).
 Salus/
 ├── main.go                     main() → run(): open/close DB, seed catalog, run Cobra root, map exit code
 ├── main_test.go                End-to-end exit codes and persistence through run()
-├── database_path.go            SALUS_DB_PATH resolution (constants live in internal/database.go)
-├── database_path_test.go
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
@@ -29,7 +27,9 @@ Salus/
 │   ├── checks_test.go          Docker/kubectl/systemctl/misconfig checks with fake tools (fakeToolOptions)
 │   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL
 │   ├── report.go               Text/JSON output, WorstStatus, exit codes (ExitCodeFor, ExitStatusError, ExitCode)
-│   ├── database.go             GORM models, NewDatabase + AutoMigrate, Close, ErrNotFound, DB path constants
+│   ├── database.go             GORM models, NewDatabase (owner-only file) + AutoMigrate, OpenDatabase, Close
+│   ├── database-path.go        SALUS_DB_PATH / per-user default path per OS, databaseFile
+│   ├── database-path_test.go   Path resolution per OS, file modes, read-only and ?param handling
 │   ├── database_test.go
 │   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
 │   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob
@@ -59,10 +59,11 @@ locally but is empty and untracked.
 
 ```mermaid
 flowchart LR
-    main["main.go"] --> dbpath["database_path.go<br/>SALUS_DB_PATH"]
-    main --> NewDatabase
-    main --> Seed["EnsureDefaultFeatures<br/>(seed.go)"]
-    main --> Root["newRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
+    main["main.go run()"] --> Root["newRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
+    main -. "lazy DatabaseOpener" .-> Open["OpenDatabase<br/>(database.go)"]
+    Open --> dbpath["DatabasePath<br/>SALUS_DB_PATH or per-user default<br/>(database-path.go)"]
+    Open --> NewDatabase["NewDatabase<br/>0700 dir / 0600 file"]
+    Open --> Seed["EnsureDefaultFeatures<br/>(seed.go)"]
 
     Root --> CheckList["check list"]
     Root --> CheckRun["check run"]

@@ -123,6 +123,42 @@ Rename-Item .\salus_windows_amd64.exe salus.exe
 ```
 Then add the directory containing `salus.exe` to your `PATH`.
 
+## Configuration
+
+Salus stores job history in a SQLite database. The database is created on the
+first command that needs it (`check run` without `--no-save`, `check list`,
+`jobs list`, `jobs show`); `--help`, `--version`, and `check run --no-save`
+never create it.
+
+| Setting | Default | Purpose |
+|---|---|---|
+| `SALUS_DB_PATH` (optional) | Per-user location below | Path of the database file. Overrides the default. |
+
+Default database location when `SALUS_DB_PATH` is not set:
+
+| Platform | Path |
+|---|---|
+| Linux and other Unix | `$XDG_DATA_HOME/salus/salus.db`, or `~/.local/share/salus/salus.db` when `XDG_DATA_HOME` is unset |
+| macOS | `~/Library/Application Support/salus/salus.db` |
+| Windows | `%LOCALAPPDATA%\salus\salus.db` |
+
+Salus creates a new database file with mode `0600` and any missing parent
+directories with mode `0700`. The `misconfig` check warns if the database file
+is readable or writable by group or other users (on Linux and macOS).
+
+### Upgrading from 1.0.x
+
+- **Database location:** 1.0.x created `salus.db` in the current working
+  directory. Newer versions no longer read that file by default. To keep your
+  job history, move it to the location above, or set
+  `SALUS_DB_PATH=/path/to/salus.db`.
+- **Database permissions:** databases created by 1.0.x are usually readable by
+  other users (mode `0644`), which now makes `misconfig` report `WARN` (exit
+  code `1`). Restrict the file with `chmod 600 /path/to/salus.db`.
+- **`--service` values** must be systemd unit names (letters, digits, and
+  `:-_.\@`, not starting with `-`). Other values fail the `service-uptime`
+  check without running `systemctl`.
+
 ## Docker
 
 Build the image:
@@ -140,6 +176,8 @@ docker run -it --rm \
 
 Note:
  - The container uses `SALUS_DB_PATH=/app/data/salus.db` by default.
- - Database state is persisted in `/app/data`.
+ - Database state is persisted in `/app/data`. A database created in that
+   volume by Salus 1.0.x may need `chmod 600` (see
+   [Upgrading from 1.0.x](#upgrading-from-10x)).
  - Checking Docker or Kubernetes status from inside the container requires
    mounting the Docker socket or a kubeconfig, respectively.

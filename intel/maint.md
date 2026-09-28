@@ -26,11 +26,11 @@ HTTP interface is ever added.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry point | `main.go`, `database_path.go`, `version.go` | `run()` resolves the DB path from `SALUS_DB_PATH`, opens the DB (closed on return), seeds the catalog, builds the root command with the build `version` (`--version`), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
+| Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
 | CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`) and flag parsing. `check run` returns `*ExitStatusError` for WARN/FAIL. |
 | Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
 | Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
-| Persistence | `internal/database.go`, `internal/scan-store.go`, `internal/seed.go` | GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
+| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
 | Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only), scheduled for removal because Salus is CLI-only (Q-001, `plan.md` P5-2). |
 
 All application code lives in the single package
@@ -84,9 +84,15 @@ authorization plus README and `history.md` updates:
   `runGroup`, which rejects unknown subcommands (with suggestions) instead of
   printing help and exiting 0. Leaf commands declare `Args` (`cobra.NoArgs`,
   `cobra.ExactArgs(1)`).
-- **Environment variable:** `SALUS_DB_PATH` (default `salus.db` in the current
-  working directory). The default is approved to move to a per-user data
-  directory (Q-002, `plan.md` P1-10). `SALUS_DB_PATH` will keep overriding it.
+- **Environment variable:** `SALUS_DB_PATH` overrides the database path. The
+  default is per-user (Q-002, since the release after 1.0.0; 1.0.x used
+  `./salus.db`): `$XDG_DATA_HOME/salus/salus.db` or
+  `~/.local/share/salus/salus.db` on Linux and other Unix,
+  `~/Library/Application Support/salus/salus.db` on macOS, and
+  `%LOCALAPPDATA%\salus\salus.db` on Windows (`DefaultDatabasePath`).
+  Changing these paths is a breaking change for existing users' history.
+- **`--service` values** must be systemd unit names (`validUnitName`).
+  Anything else fails the check without running `systemctl` (SEC-001).
 - **Database schema:** tables for `FeatureCategory`, `Feature`, `ScanJob`,
   `ScanResult` managed by GORM `AutoMigrate`.
 
@@ -123,7 +129,12 @@ authorization plus README and `history.md` updates:
   no shell. Tests replace them through the unexported `lookPath` and
   `runCommand` fields of `CheckOptions` (see `fakeToolOptions` in
   `internal/checks_test.go`). Validate any user-supplied argument before
-  passing it (see `SEC-001` in `cybersec.md`).
+  passing it, and end option parsing with `--` before it where the tool
+  supports it (see `SEC-001` in `cybersec.md`; `--service` is validated by
+  `validUnitName` and passed as `systemctl is-active -- <name>`).
+- `check run` validates `--only` keys (`ValidateCheckKeys`) and opens the
+  database before running any check, so input and storage errors are
+  reported before slow checks run.
 - Outcome messages are a single line. Use `firstLine` on tool output.
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
@@ -158,6 +169,16 @@ authorization plus README and `history.md` updates:
 - GORM's logger is set to `logger.Silent` in `NewDatabase`. The default logger
   writes to stdout (corrupting `--json`) and logs normal "record not found"
   lookups. Database errors are returned and reported by the CLI.
+- Commands receive a `DatabaseOpener` and call it only when they need
+  storage. `--help`, `--version`, `completion`, and `check run --no-save`
+  never create a database. `main.run` opens the database at most once.
+- `NewDatabase` creates a missing database file with mode `0600` and missing
+  parent directories with `0700` before SQLite opens it (SEC-004). It never
+  touches an existing file, which may be read-only. The file is derived with
+  `databaseFile`, which mirrors go-sqlite3's handling of `?` parameters and
+  skips `:memory:` and `file:` URIs; the `misconfig` check uses the same
+  helper.
+- Stored result messages are capped at 1024 bytes (`truncateMessage`).
 - Every `NewDatabase` must be paired with `Close`: `main.run` defers it, and
   `newTestDatabase` registers it with `t.Cleanup`. Windows cannot delete an
   open SQLite file, and `t.TempDir` cleanup fails if the handle stays open

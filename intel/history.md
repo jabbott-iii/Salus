@@ -153,3 +153,51 @@ reconstructed from commit messages and diffs, not first-hand records.
   so `t.TempDir` cleanup could not delete it. Exit code `3` is a
   maintainer-approved change to the public exit-code contract (Q-004).
   Uncommitted at the time of writing.
+
+## 2026-09-27: v1.0.0 released
+
+- Change: Tagged `v1.0.0` at `231487a`. The CD workflow published six
+  archives (`salus_{linux,darwin}_{amd64,arm64}.tar.gz`,
+  `salus_windows_{amd64,arm64}.zip`) and `checksums.txt` as a GitHub Release.
+  CI, Docker, and Security workflows were green on the preceding code commit
+  `0d3b91a`.
+- Files: none (tag and release only)
+- Reason / reference: First release. It also confirms plan item P0-3 (CD
+  workflow).
+
+## 2026-09-27: Per-user database location, lazy opening, SEC-001 and SEC-004 remediation
+
+- Change:
+  - The default database moved from `./salus.db` to a per-user path
+    (`$XDG_DATA_HOME/salus` or `~/.local/share/salus` on Linux and Unix,
+    `~/Library/Application Support/salus` on macOS, `%LOCALAPPDATA%\salus`
+    on Windows). `SALUS_DB_PATH` still overrides it.
+  - Commands open the database lazily through a `DatabaseOpener`, so `--help`,
+    `--version`, `completion`, and `check run --no-save` never create one.
+  - New database files are created with mode `0600` and new directories with
+    `0700`. Existing files are untouched, and read-only databases still open.
+  - `misconfig` checks the effective database file for any group/other
+    access.
+  - Stored messages are capped at 1024 bytes.
+  - `--service` values are validated as systemd unit names and passed after
+    `--`.
+  - `check run` validates `--only` and opens storage before running checks.
+  - Removed `database_path.go` and `database_path_test.go` from package
+    `main`; the logic moved to `internal/database-path.go`.
+- Files: `main.go`, `main_test.go`, `version.go`, `database_path.go`
+  (deleted), `database_path_test.go` (deleted), `internal/database-path.go`,
+  `internal/database-path_test.go`, `internal/database.go`,
+  `internal/health.go`, `internal/checks_test.go`, `internal/logic-cli.go`,
+  `internal/logic-cli_test.go`, `internal/scan-store.go`,
+  `internal/scan-store_test.go`, `README.md`, `CONTRIBUTING.md`,
+  `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md`,
+  `intel/cybersec.md`
+- Reason / reference: Plan items P1-10 (Q-002), P2-1 (SEC-001), and P2-2
+  (SEC-004).
+  - An independent review before writing caught two defects, both fixed with
+    tests: `?` parameters in `SALUS_DB_PATH` created a stray file and made the
+    permission check read the wrong file, and opening with write access broke
+    read-only databases.
+  - This is a user-visible change after v1.0.0; see the README section
+    "Upgrading from 1.0.x".
+  - Uncommitted at the time of writing.

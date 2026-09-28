@@ -27,8 +27,8 @@ var version = "dev"
 
 // newRootCmd builds the Salus command tree and attaches the build version,
 // which makes Cobra provide the --version flag.
-func newRootCmd(db *internal.Database) *cobra.Command {
-	root := internal.NewRootCmd(db)
+func newRootCmd(openDB internal.DatabaseOpener) *cobra.Command {
+	root := internal.NewRootCmd(openDB)
 	root.Version = version
 	return root
 }

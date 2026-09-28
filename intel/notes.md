@@ -60,7 +60,28 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   `featureByKey` now uses the transaction handle.
 - **DB is opened for every command,** including `--help`, `--version`,
   `check list`, and `check run --no-save`, so `salus.db` is created in the current directory
-  even when nothing is persisted.
+  even when nothing is persisted. *Resolved 2026-09-27 (P1-10):* commands open
+  the database lazily, and the default is a per-user path.
+- **Upgrade impact of P1-10 and SEC-004 (first release after 1.0.0).** 1.0.x
+  users' `./salus.db` is no longer read by default, so job history looks empty
+  until they move the file or set `SALUS_DB_PATH`. Databases created by 1.0.x
+  (typically `0644`, including Docker volumes at `/app/data/salus.db`) now
+  make `misconfig` WARN, so `check run` exits `1` until the file is
+  `chmod 600`. Both are documented in the README ("Upgrading from 1.0.x").
+  Printing a stderr hint when `./salus.db` exists was considered and not done,
+  to avoid per-run noise.
+- **gosec baseline (v2.29.0, run locally 2026-09-27; non-blocking in CI).**
+  Four findings, all reviewed:
+  - G115 ×2 (`health-resources_linux.go`, converting `statfs` `Bsize` from
+    int64 to uint64): pre-existing. The kernel's block size is positive, so
+    accepted.
+  - G204 (`CheckOptions.command`): tool names are constants, and the only user
+    input (`--service`) is validated and follows `--` (SEC-001).
+  - G304 (`createDatabaseFile`): the path is the user's own `SALUS_DB_PATH` or
+    per-user default, by design.
+- **`?` in database paths.** go-sqlite3 treats text after the first `?` of a
+  plain path as connection parameters. `databaseFile` mirrors this, so file
+  creation and the permission check target the real file.
 - **`--quiet` with `--json`** printed JSON. *Resolved 2026-09-27 (P1-6):*
   `--quiet` wins and suppresses report output. This was chosen over making the
   flags mutually exclusive, which would have turned the combination into an
@@ -145,7 +166,7 @@ Decisions recorded 2026-09-27 from the maintainer.
 | ID | Question | Why it matters | Decision |
 |---|---|---|---|
 | Q-001 | Is a TUI still planned, for example with Bubble Tea, or should the empty `logic-tui.go` and `ui-form.go` be removed? | Determines whether new dependencies are expected and whether the placeholders are dead code. | **No TUI. Salus is a pure CLI.** Remove the placeholders (P5-2). |
-| Q-002 | Should the default database stay at `./salus.db`, or move to a per-user data directory (for example `$XDG_DATA_HOME/salus/salus.db`)? | Changing it is a behavior change. It affects SEC-004 and cron/CI usage. | **Per-user data directory.** `SALUS_DB_PATH` still overrides (P1-10). |
+| Q-002 | Should the default database stay at `./salus.db`, or move to a per-user data directory (for example `$XDG_DATA_HOME/salus/salus.db`)? | Changing it is a behavior change. It affects SEC-004 and cron/CI usage. | **Per-user data directory.** `SALUS_DB_PATH` still overrides. Implemented 2026-09-27 (P1-10), after v1.0.0. |
 | Q-003 | What is the canonical release format: raw binaries as the README describes, or archives as `cd.yml` produces? | README install steps and CD packaging must agree. | **Archives, as `cd.yml` produces.** README updated. |
 | Q-004 | Should operational errors use a distinct exit code (for example `3`) instead of sharing `1` with WARN? | Changes the public exit-code contract, but makes Salus reliable in scripts. | **Yes.** Distinct exit code (P1-9). |
 | Q-005 | Should disk, memory, and CPU checks be implemented for macOS and Windows, or documented as Linux-only (and possibly reported as skipped instead of WARN)? | Cross-platform support likely needs `golang.org/x/sys` or per-OS syscalls. The status choice affects exit codes. | **Implement for macOS and Windows** (P3-7). |

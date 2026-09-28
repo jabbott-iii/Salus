@@ -26,8 +26,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// DatabaseOpener returns the database, opening it on first use. Commands call
+// it only when they need storage, so help, --version, completion, and
+// check run --no-save never create a database file.
+type DatabaseOpener func() (*Database, error)
+
 // NewRootCmd builds the Salus CLI command tree.
-func NewRootCmd(db *Database) *cobra.Command {
+func NewRootCmd(openDB DatabaseOpener) *cobra.Command {
 	root := &cobra.Command{
 		Use:   "salus",
 		Short: "Salus is an environment health checker",
@@ -39,8 +44,8 @@ func NewRootCmd(db *Database) *cobra.Command {
 		SilenceUsage:  true,
 	}
 
-	root.AddCommand(newCheckCmd(db))
-	root.AddCommand(newJobsCmd(db))
+	root.AddCommand(newCheckCmd(openDB))
+	root.AddCommand(newJobsCmd(openDB))
 
 	return root
 }
@@ -59,7 +64,7 @@ func runGroup(cmd *cobra.Command, args []string) error {
 	return errors.New(msg)
 }
 
-func newCheckCmd(db *Database) *cobra.Command {
+func newCheckCmd(openDB DatabaseOpener) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "check",
 		Short: "Run or list environment health checks",
@@ -68,18 +73,22 @@ func newCheckCmd(db *Database) *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 	}
 
-	cmd.AddCommand(newCheckListCmd(db))
-	cmd.AddCommand(newCheckRunCmd(db))
+	cmd.AddCommand(newCheckListCmd(openDB))
+	cmd.AddCommand(newCheckRunCmd(openDB))
 
 	return cmd
 }
 
-func newCheckListCmd(db *Database) *cobra.Command {
+func newCheckListCmd(openDB DatabaseOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "list",
 		Short: "List available health checks",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := openDB()
+			if err != nil {
+				return err
+			}
 			features, err := ListFeatures(db)
 			if err != nil {
 				return err
@@ -96,7 +105,7 @@ func newCheckListCmd(db *Database) *cobra.Command {
 	}
 }
 
-func newCheckRunCmd(db *Database) *cobra.Command {
+func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
 	var (
 		only       []string
 		service    string
@@ -115,6 +124,20 @@ func newCheckRunCmd(db *Database) *cobra.Command {
 			opts := CheckOptions{
 				DiskPath:    diskPath,
 				ServiceName: service,
+			}
+
+			if err := ValidateCheckKeys(only); err != nil {
+				return err
+			}
+
+			// Open storage before running checks, so a database problem is
+			// reported before slow checks run rather than after.
+			var db *Database
+			if !noSave {
+				var err error
+				if db, err = openDB(); err != nil {
+					return err
+				}
 			}
 
 			startedAt := time.Now()
@@ -165,7 +188,7 @@ func newCheckRunCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
-func newJobsCmd(db *Database) *cobra.Command {
+func newJobsCmd(openDB DatabaseOpener) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "jobs",
 		Short: "View past health check runs",
@@ -174,13 +197,13 @@ func newJobsCmd(db *Database) *cobra.Command {
 		SuggestionsMinimumDistance: 2,
 	}
 
-	cmd.AddCommand(newJobsListCmd(db))
-	cmd.AddCommand(newJobsShowCmd(db))
+	cmd.AddCommand(newJobsListCmd(openDB))
+	cmd.AddCommand(newJobsShowCmd(openDB))
 
 	return cmd
 }
 
-func newJobsListCmd(db *Database) *cobra.Command {
+func newJobsListCmd(openDB DatabaseOpener) *cobra.Command {
 	var limit int
 
 	cmd := &cobra.Command{
@@ -188,6 +211,10 @@ func newJobsListCmd(db *Database) *cobra.Command {
 		Short: "List recent health check runs",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			db, err := openDB()
+			if err != nil {
+				return err
+			}
 			jobs, err := ListScanJobs(db, limit)
 			if err != nil {
 				return err
@@ -212,7 +239,7 @@ func newJobsListCmd(db *Database) *cobra.Command {
 	return cmd
 }
 
-func newJobsShowCmd(db *Database) *cobra.Command {
+func newJobsShowCmd(openDB DatabaseOpener) *cobra.Command {
 	return &cobra.Command{
 		Use:   "show [job-id]",
 		Short: "Show details for a specific health check run",
@@ -223,6 +250,10 @@ func newJobsShowCmd(db *Database) *cobra.Command {
 				return fmt.Errorf("invalid job id %q: %w", args[0], err)
 			}
 
+			db, err := openDB()
+			if err != nil {
+				return err
+			}
 			job, results, err := GetScanJob(db, uint(id))
 			if err != nil {
 				return err
