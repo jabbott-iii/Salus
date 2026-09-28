@@ -7,7 +7,7 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
+Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
 changes).
 
 ## 1. Purpose and scope
@@ -189,8 +189,14 @@ authorization plus README and `history.md` updates:
 
 ## 5. Build, platform, and dependency constraints
 
-- **Go version:** `go 1.26.0` in `go.mod`; CI and CD read the version from
-  `go.mod`, and the Dockerfile uses `golang:1.26-alpine`. Keep these aligned.
+- **Go version:** `go 1.26.8` in `go.mod`. CI, CD, and the Security workflow
+  install exactly this version through `setup-go`'s `go-version-file`, so it
+  decides which standard-library security fixes ship in release binaries
+  (SEC-008). Keep it at the latest patch release of the Go minor version in
+  use. `govulncheck` fails when it falls behind on a reachable fix.
+- The Docker builder (`golang:1.26-alpine3.24`) sets `GOTOOLCHAIN=local`, so
+  it must provide at least the `go.mod` version, or the image build fails.
+  Bump the `go` directive and the builder image together.
 - **CGO is required.** `gorm.io/driver/sqlite` uses `github.com/mattn/go-sqlite3`.
   A `CGO_ENABLED=0` build compiles but cannot open the database at runtime.
   Every build needs a C toolchain.
@@ -239,7 +245,28 @@ authorization plus README and `history.md` updates:
   (Windows), plus `checksums.txt` (Q-003). The README install section must
   match it.
 - Third-party actions are pinned by commit SHA with a version comment. Keep
-  that practice for every new action.
+  that practice for every new action. Dependabot (`.github/dependabot.yml`:
+  `gomod`, `github-actions`, `docker`, weekly) updates the pins. Tools run with
+  `go run tool@version` (for example `govulncheck` in `security.yml`) are not
+  seen by Dependabot and must be bumped by hand.
+- `security.yml` also runs `govulncheck`, which fails on vulnerabilities
+  reachable from Salus code (SEC-005). Unlike gosec, it is blocking.
+- Container image (`Dockerfile`):
+  - Both stages are pinned by digest on the same Alpine release, so the binary
+    runs against the musl it was linked with. Bump the builder and runtime
+    tags together. Dependabot only automates digest and patch updates, grouped
+    into one PR.
+  - The runtime stage installs no packages: go-sqlite3 compiles SQLite into
+    the binary, and Salus makes no TLS connections. Add packages only with a
+    concrete need.
+  - The runtime runs as UID/GID 10001 (`salus`), which owns `/app/data`; the
+    directory must be created and chowned before `VOLUME`.
+  - `.dockerignore` keeps local state and secrets out of the build context
+    (SEC-003).
+  - The image does not ship `docker` or `kubectl`, so those checks report WARN
+    in-container by design (SEC-007).
+  - `docker.yml` asserts the non-root user, volume persistence, and those
+    WARN results.
 - Smoke tests and artifact names must use the Salus binary name, the
   `SALUS_DB_PATH` variable, and real Salus commands. Smoke steps accept
   `check run` exit codes 0 and 1 only, because runner host state varies, and

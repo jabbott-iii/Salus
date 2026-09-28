@@ -158,6 +158,14 @@ is readable or writable by group or other users (on Linux and macOS).
 - **`--service` values** must be systemd unit names (letters, digits, and
   `:-_.\@`, not starting with `-`). Other values fail the `service-uptime`
   check without running `systemctl`.
+- **Docker volumes:** the 1.0.x image ran as root, so a database it created in
+  the `/app/data` volume is owned by root. The image now runs as UID 10001, so
+  hand the existing data over once:
+
+  ```bash
+  docker run --rm --user 0 --entrypoint sh -v salus-data:/app/data salus \
+    -c 'chown -R 10001:10001 /app/data && chmod 700 /app/data && find /app/data -type f -exec chmod 600 {} +'
+  ```
 
 ## Docker
 
@@ -175,9 +183,19 @@ docker run -it --rm \
 ```
 
 Note:
- - The container uses `SALUS_DB_PATH=/app/data/salus.db` by default.
- - Database state is persisted in `/app/data`. A database created in that
-   volume by Salus 1.0.x may need `chmod 600` (see
+ - The container runs as the unprivileged user `salus` (UID and GID `10001`)
+   and uses `SALUS_DB_PATH=/app/data/salus.db` by default.
+ - Database state is persisted in `/app/data`. A new named volume, as in the
+   example above, is writable by the container automatically. For a bind
+   mount, make the host directory writable by UID `10001` first (for example
+   `sudo chown 10001:10001 /path/to/data`). A volume created by Salus 1.0.x
+   needs a one-time ownership fix (see
    [Upgrading from 1.0.x](#upgrading-from-10x)).
- - Checking Docker or Kubernetes status from inside the container requires
-   mounting the Docker socket or a kubeconfig, respectively.
+ - The `docker-status` and `kubernetes-status` checks are not supported inside
+   the container. The image does not include the `docker` or `kubectl` CLIs,
+   so those checks report `WARN` (`... CLI not found in PATH`). Run the
+   `salus` binary on the host for them. Do not mount the Docker socket into
+   the container: it gives the container root-equivalent control of the host.
+ - Resource checks inside a container see the container's view: `/proc`
+   memory and load figures are host-wide, and `disk-space` measures the
+   container filesystem unless you mount a host path and pass `--disk-path`.

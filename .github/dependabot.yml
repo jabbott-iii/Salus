@@ -1,0 +1,28 @@
+# Dependency update automation (SEC-005). Actions stay pinned by commit SHA and
+# Docker base images by digest; Dependabot updates the pin and its version
+# comment or tag together.
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Builder and runtime must stay on the same Alpine release (see Dockerfile), and
+  # Go/Alpine version moves are deliberate changes, so only digest and patch
+  # updates are automated, grouped into one PR. Bump the tags together by hand.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+    groups:
+      base-images:
+        patterns: ["*"]

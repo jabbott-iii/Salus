@@ -25,7 +25,9 @@ Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ### Prerequisites
 
-- **Go 1.26** or newer, matching the `go` directive in `go.mod`.
+- **Go 1.26.8** or newer, matching the `go` directive in `go.mod`. With the
+  default `GOTOOLCHAIN=auto`, an older Go 1.21+ toolchain downloads the
+  required version automatically.
 - **A C toolchain** (for example `gcc` or `clang`) with `CGO_ENABLED=1`.
   Salus uses `gorm.io/driver/sqlite`, which depends on the CGO driver
   `github.com/mattn/go-sqlite3`. A build with CGO disabled compiles but

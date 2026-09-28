@@ -5,7 +5,7 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
+Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
 changes).
 
 ## Threat model summary
@@ -63,8 +63,7 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-001: Option injection through `--service` into `systemctl`
 
-- **Status:** In Progress (implemented and validated locally 2026-09-27;
-  close once merged with CI green)
+- **Status:** Closed (2026-09-27)
 - **Affected component:** `internal/health.go`, `checkServiceUptime`
 - **Risk:** Low. The `--service` value is passed verbatim as an argument to
   `systemctl is-active <name>`. A value that starts with `-` is parsed as a
@@ -82,7 +81,7 @@ comment, and the current Code Scanning alert state on GitHub.
   `systemctl`, and that `nginx`, `nginx.service`, and `getty@tty1.service` are
   accepted. The gosec G204 finding for the command wrapper
   (`CheckOptions.command`) is reviewed and documented.
-- **Resolution:** Pending merge. `validUnitName` (in `internal/health.go`)
+- **Resolution:** Merged in `753252e`; CI run #48 (36367840814), Docker #14, and Security #53 are green on `753252e` (Ubuntu, macOS, Windows). `validUnitName` (in `internal/health.go`)
   accepts only systemd unit-name characters (`A-Za-z0-9:_.\@-`), no leading
   `-`, and at most 255 bytes. Invalid names return `FAIL` ("invalid service
   name …") before `systemctl` is looked up or run. Valid names are passed as
@@ -95,7 +94,8 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-002: Container image runs as root and base images are not digest-pinned
 
-- **Status:** Open
+- **Status:** In Progress (implemented 2026-09-27; awaiting the Docker workflow
+  with the P2-4 workflow patch applied)
 - **Affected component:** `Dockerfile`, `.github/workflows/docker.yml`
 - **Risk:** Medium. The runtime stage has no `USER` directive, so `salus` runs
   as root. Combined with the README's guidance to mount the Docker socket, a
@@ -111,11 +111,27 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** `docker run --rm --entrypoint id <image>` reports a non-zero
   UID. The `docker.yml` smoke test writes to and reads from the `/app/data`
   volume as that user. Both `FROM` lines contain digests.
-- **Resolution:** None yet.
+- **Resolution:** Pending CI.
+  - The runtime stage creates `salus` (UID/GID 10001), gives it `/app/data`
+    (mode 0700, before `VOLUME`, so new named volumes inherit the owner), and
+    sets `USER 10001:10001`.
+  - Both stages are pinned by index digest, and Dependabot's `docker`
+    ecosystem keeps them current: `golang:1.26-alpine3.24@sha256:8ac98ca5…`
+    and `alpine:3.24@sha256:294b683c…`, from Docker Hub on 2026-09-27. The
+    runtime moved from Alpine 3.22 to 3.24 to match the builder's musl.
+  - The README no longer suggests mounting the Docker socket (SEC-007) and
+    documents the one-time `chown` for 1.0.x volumes.
+  - Validation is added to `docker.yml` in the P2-4 patch: a
+    `Verify non-root user` step (`id -u` must not be 0), and the existing
+    volume smoke test now runs as UID 10001.
+  - `hadolint` v2.15.1 reports only DL3018 (unpinned `apk` package versions),
+    which the Dockerfile already had. The runtime stage no longer installs any
+    packages (`sqlite-libs` and `ca-certificates` were unused), which also
+    shrinks its attack surface.
 
 ### SEC-003: No `.dockerignore`; full working tree is sent to the build context
 
-- **Status:** Open
+- **Status:** In Progress (implemented 2026-09-27; awaiting validation)
 - **Affected component:** `Dockerfile` (`COPY . .`), repository root
 - **Risk:** Low. Without a `.dockerignore`, the entire directory is sent to the
   builder, including `.git/`, `.idea/`, any local `.env`, and any `*.db` files
@@ -128,12 +144,16 @@ comment, and the current Code Scanning alert state on GitHub.
   `docker.yml` build still succeeds. A test file named `.env` in the tree is
   absent from the builder stage (checked with a temporary `RUN ls -a`
   locally, not committed).
-- **Resolution:** None yet.
+- **Resolution:** Pending validation. `.dockerignore` excludes `.git`,
+  `.github`, `.idea`, `.vscode`, `.devcontainer`, `.junie`, `intel`, `.env*`,
+  SQLite files (`*.db`, `-journal`, `-wal`, `-shm`), `dist`, coverage and test
+  outputs, and local `salus` binaries. A Docker daemon was not available in
+  the analysis environment, so the local context check above is still needed.
+  The CI build covers the "build still succeeds" part.
 
 ### SEC-004: SQLite database created with default permissions in the working directory
 
-- **Status:** In Progress (implemented and validated locally 2026-09-27;
-  close once merged with CI green)
+- **Status:** Closed (2026-09-27)
 - **Affected component:** `internal/database-path.go`, `internal/database.go`
   (`NewDatabase`), `internal/health.go` (`checkMisconfiguration`)
 - **Risk:** Low. By default `salus.db` is created in whatever directory Salus
@@ -155,7 +175,8 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** A unit test on Unix asserts that a newly created database
   has mode `0600`. A `misconfig` test with a `0644` database file returns
   `WARN`. A test asserts truncation of messages longer than the bound.
-- **Resolution:** Pending merge.
+- **Resolution:** Merged in `753252e`; CI run #48 (36367840814), Docker #14, and Security #53 are green on `753252e` (Ubuntu, macOS, Windows), and the Docker smoke test
+  passes with the new owner-only database file.
   - New database files are created with `O_EXCL` and mode `0600`, and missing
     parent directories with `0700`. Existing files are never modified, so
     read-only databases still open.
@@ -176,7 +197,8 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-005: No dependency vulnerability scanning or update automation
 
-- **Status:** Open
+- **Status:** In Progress (implemented 2026-09-27 as a workflow patch; awaiting
+  merge and the validation below)
 - **Affected component:** `.github/workflows/`, `.github/` (no `dependabot.yml`)
 - **Risk:** Low. Nothing runs `govulncheck` against the module graph. SHA-pinned
   actions, Go modules, and Docker base images have no automated update path,
@@ -193,7 +215,18 @@ comment, and the current Code Scanning alert state on GitHub.
   on a known-vulnerable test fixture or version (checked once on a branch).
   Dependabot opens update PRs. The non-blocking gosec policy is documented in
   `maint.md`.
-- **Resolution:** None yet.
+- **Resolution:** Pending merge of `salus-p24-workflows.patch`.
+  - `security.yml` gains a `govulncheck` job with job-level `contents: read`.
+    It runs on every push and PR and weekly, and executes
+    `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`, which exits
+    non-zero on reachable vulnerabilities. That version is pinned manually
+    because Dependabot does not see it.
+  - `.github/dependabot.yml` covers `gomod`, `github-actions`, and `docker`
+    weekly.
+  - The gosec policy is already recorded in `maint.md` section 7.
+  - `govulncheck` could not be run in the analysis environment (the
+    vulnerability database host is blocked), so the first CI run is the
+    first result.
 
 ### SEC-006: Release artifacts are not signed and have no provenance
 
@@ -215,7 +248,7 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-007: README recommends mounting the Docker socket into the container
 
-- **Status:** Open
+- **Status:** In Progress (README updated 2026-09-27; awaiting the CI assertion)
 - **Affected component:** `README.md` ("Docker" section), `Dockerfile`
 - **Risk:** Low (documentation). Mounting `/var/run/docker.sock` gives the
   container root-equivalent control of the host (compounded by SEC-002). The
@@ -231,4 +264,35 @@ comment, and the current Code Scanning alert state on GitHub.
   image.
 - **Validation:** README review. `docker run` of the image, with and without
   the socket mount, matches the documented behavior.
-- **Resolution:** None yet.
+- **Resolution:** Pending CI. The README Docker section now says the
+  `docker-status` and `kubernetes-status` checks are unsupported in the image
+  (they report `WARN`), recommends running the binary on the host, and warns
+  against mounting the Docker socket. The P2-4 patch adds a `docker.yml` step
+  that asserts both checks report `WARN` with "CLI not found in PATH" inside
+  the image. No socket is involved: the result does not depend on a socket,
+  because the CLIs are absent.
+
+### SEC-008: Release binaries built with an outdated Go patch release
+
+- **Status:** In Progress (fixed in the working tree 2026-09-27; awaiting CI and
+  a new release)
+- **Affected component:** `go.mod` (`go` directive); `.github/workflows/cd.yml`
+  and `ci.yml` (`setup-go` with `go-version-file: go.mod`); the v1.0.0 release
+  archives
+- **Risk:** Low to Medium; the exact exposure is unknown until `govulncheck`
+  runs. `go.mod` declared `go 1.26.0`, and `setup-go` installs exactly that
+  version, so CI tested with, and CD built v1.0.0 with, Go 1.26.0. The CI log
+  for run 36367840814 shows `go version go1.26.0`. Standard-library security
+  fixes from Go 1.26.1 through 1.26.8 are missing from those binaries. Salus is
+  a local CLI with no network listener, which limits reachability. The Docker
+  image was not affected: its builder already used Go 1.26.8.
+- **Required remediation:** Set the `go` directive to the latest 1.26 patch
+  release (1.26.8), and keep it current (see `maint.md` section 5). Run
+  `govulncheck` in CI (SEC-005). Publish a new release built with the patched
+  toolchain.
+- **Validation:** The CI and CD logs show `go version go1.26.8`. The
+  `govulncheck` job passes. `go version -m` on a new release binary reports
+  `go1.26.8`.
+- **Resolution:** Pending. `go.mod` is now `go 1.26.8`. Locally, tests pass
+  and `go version -m` on the built binary reports `go1.26.8`. It still needs a
+  CI run and a new release.

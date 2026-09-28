@@ -3,8 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-27 (against commit `4995446`, plus the uncommitted
-M2 changes recorded in `history.md`).
+Last reviewed: 2026-09-27 (against commit `753252e`, plus the uncommitted
+P2-3/P2-4 changes recorded in `history.md`).
 
 ## Engineering notes
 
@@ -79,6 +79,33 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
     input (`--service`) is validated and follows `--` (SEC-001).
   - G304 (`createDatabaseFile`): the path is the user's own `SALUS_DB_PATH` or
     per-user default, by design.
+- **Container image (P2-3, 2026-09-27).**
+  - `golang:1.26-alpine` had moved to Alpine 3.24 while the runtime stage was
+    `alpine:3.22`, so the binary was linked against a newer musl than it ran
+    on. Both stages are now pinned to 3.24 (`golang:1.26-alpine3.24`,
+    `alpine:3.24`). `golang:1.26-alpine3.22` was not used because it had not
+    been rebuilt since June 2026 and would ship an older Go.
+  - The runtime stage no longer installs `sqlite-libs` or `ca-certificates`.
+    go-sqlite3 compiles its bundled SQLite unless built with the `libsqlite3`
+    tag, and Salus makes no TLS connections. This was established from the
+    source rather than `ldd`; the Docker smoke tests confirm the binary runs.
+  - `hadolint` v2.15.1 reports only DL3018 for the builder's
+    `apk add build-base` (no version pin). This is accepted: Alpine drops old
+    package versions, so pins would break rebuilds. The base-image digest pins
+    already fix the package set.
+  - **Go patch version (SEC-008).** CI and CD installed Go 1.26.0, because
+    `go.mod` said `go 1.26.0` and `setup-go` installs exactly that version
+    (CI log for run 36367840814: `Setup go version spec 1.26.0`,
+    `go version go1.26.0`). v1.0.0 release archives were therefore built with
+    1.26.0, while the Docker image was built with the builder's 1.26.8.
+    `go.mod` is now `go 1.26.8` (released 2026-09-01; the
+    `golang:1.26-alpine3.24` image is on 1.26.8 with `GOTOOLCHAIN=local`).
+  - The image now runs as UID 10001. A Docker volume created by 1.0.x holds a
+    root-owned `salus.db` that this user cannot write, so it needs the
+    one-time `chown` in the README.
+  - No Docker daemon or registry access was available in the analysis
+    environment, so the image was not built locally. The Docker workflow is
+    the first build.
 - **`?` in database paths.** go-sqlite3 treats text after the first `?` of a
   plain path as connection parameters. `databaseFile` mirrors this, so file
   creation and the permission check target the real file.

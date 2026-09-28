@@ -201,3 +201,60 @@ reconstructed from commit messages and diffs, not first-hand records.
   - This is a user-visible change after v1.0.0; see the README section
     "Upgrading from 1.0.x".
   - Uncommitted at the time of writing.
+
+## 2026-09-27: Container hardening, vulnerability scanning, and update automation (P2-3 to P2-5)
+
+- Change:
+  - Closed SEC-001 and SEC-004 after `753252e` passed CI #48, Docker #14,
+    and Security #53.
+  - `Dockerfile`:
+    - The runtime runs as `salus` (UID/GID 10001), which owns `/app/data`
+      (0700).
+    - Both stages are pinned by digest, and the runtime moved from
+      `alpine:3.22` to `alpine:3.24` to match the builder's Alpine release.
+    - The build honours `TARGETOS`/`TARGETARCH`, and the stale comments are
+      fixed.
+  - Added `.dockerignore`.
+  - README Docker section:
+    - Documents the non-root user and bind-mount ownership.
+    - Says in-container Docker and Kubernetes checks are unsupported and warns
+      against mounting the Docker socket.
+    - Adds a 1.0.x volume `chown` step to "Upgrading from 1.0.x".
+  - Workflow changes delivered as `salus-p24-workflows.patch`: a
+    `govulncheck` job in `security.yml`, `.github/dependabot.yml` (gomod,
+    github-actions, docker), and `docker.yml` assertions for the non-root
+    user and in-container WARN results.
+- Files: `Dockerfile`, `.dockerignore`, `README.md`, `intel/cybersec.md`,
+  `intel/plan.md`, `intel/maint.md`, `intel/map.md`, `intel/notes.md`; via
+  patch: `.github/workflows/security.yml`, `.github/workflows/docker.yml`,
+  `.github/dependabot.yml`
+- Reason / reference: Plan items P2-3 (SEC-002, SEC-003), P2-4 (SEC-005),
+  and P2-5 (SEC-007).
+  - The image was not built locally: no Docker daemon or registry access was
+    available. The Docker workflow is the first build.
+  - Uncommitted at the time of writing.
+
+## 2026-09-27: Go directive raised to 1.26.8 (SEC-008); container review fixes
+
+- Change:
+  - `go.mod` `go 1.26.0` → `go 1.26.8`. CI and CD install exactly the
+    `go.mod` version, so v1.0.0 release archives were built with Go 1.26.0
+    and lack later standard-library security fixes (confirmed in the CI log
+    for run 36367840814).
+  - The Docker runtime stage no longer installs `sqlite-libs` or
+    `ca-certificates` (both unused).
+  - Dependabot's docker updates are limited to digest and patch bumps,
+    grouped into one PR, so builder and runtime stay on the same Alpine
+    release.
+  - `.dockerignore` patterns now also match nested files.
+  - The README 1.0.x volume fix-up command now also works when the database
+    file is missing, and it sets the directory to 0700.
+  - `docker.yml` asserts UID 10001 exactly.
+- Files: `go.mod`, `Dockerfile`, `.dockerignore`, `README.md`,
+  `CONTRIBUTING.md`, `intel/cybersec.md`, `intel/plan.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`; via patch: `.github/dependabot.yml`,
+  `.github/workflows/docker.yml`
+- Reason / reference: An independent review of P2-3 and P2-4 flagged that the
+  new `govulncheck` job would likely fail on Go 1.26.0. Verifying that in the
+  CI log turned up SEC-008. A new release is recommended (`plan.md` M4).
+  Uncommitted at the time of writing.

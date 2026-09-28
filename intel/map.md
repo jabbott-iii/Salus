@@ -3,7 +3,7 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-27 (against commit `4995446` plus uncommitted M2
+Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
 changes).
 
 ## Directory structure
@@ -37,18 +37,20 @@ Salus/
 │   ├── logic-tui.go            Empty placeholder, to be removed (CLI-only, Q-001)
 │   └── ui-form.go              Empty placeholder, to be removed (CLI-only, Q-001)
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
+├── .github/dependabot.yml      Weekly updates: gomod, github-actions, docker (via workflow patch)
 ├── .github/workflows/
 │   ├── ci.yml                  vet, lint, test+coverage, native build smoke (3 OSes)
-│   ├── security.yml            CodeQL + gosec (SARIF)
-│   ├── docker.yml              Image build + smoke test
+│   ├── security.yml            CodeQL + gosec (SARIF, non-blocking) + govulncheck (blocking)
+│   ├── docker.yml              Image build + smoke tests (non-root, volume, in-container WARNs)
 │   └── cd.yml                  Tag-triggered 6-target CGO build → .tar.gz/.zip + checksums
 ├── .devcontainer/devcontainer.json   Ubuntu base + Go, Docker-outside-of-Docker, Neovim
-├── Dockerfile                  Multi-stage: golang:1.26-alpine → alpine:3.22
+├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001
+├── .dockerignore               Keeps .git, .env, *.db, IDE/CI files out of the build context
 ├── Makefile                    Release tagging only (tag, push-tag, release)
 ├── AGENTS.md                   Agent/contributor operating rules
 ├── README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 ├── LICENSE (Apache-2.0), NOTICE, CODEOWNERS
-└── go.mod, go.sum              Module github.com/jabbott-iii/Salus, go 1.26.0
+└── go.mod, go.sum              Module github.com/jabbott-iii/Salus, go 1.26.8 (latest patch; SEC-008)
 ```
 
 `.idea/` (JetBrains project files) is tracked (Q-007). Its own `.gitignore`
