@@ -62,14 +62,18 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   `check list`, and `check run --no-save`, so `salus.db` is created in the current directory
   even when nothing is persisted. *Resolved 2026-09-27 (P1-10):* commands open
   the database lazily, and the default is a per-user path.
-- **Upgrade impact of P1-10 and SEC-004 (first release after 1.0.0).** 1.0.x
+- **Upgrade impact of P1-10 and SEC-004 (shipped in v1.0.1).** 1.0.0
   users' `./salus.db` is no longer read by default, so job history looks empty
-  until they move the file or set `SALUS_DB_PATH`. Databases created by 1.0.x
+  until they move the file or set `SALUS_DB_PATH`. Databases created by 1.0.0
   (typically `0644`, including Docker volumes at `/app/data/salus.db`) now
   make `misconfig` WARN, so `check run` exits `1` until the file is
-  `chmod 600`. Both are documented in the README ("Upgrading from 1.0.x").
+  `chmod 600`. Both are documented in the README ("Upgrading from 1.0.0").
   Printing a stderr hint when `./salus.db` exists was considered and not done,
-  to avoid per-run noise.
+  to avoid per-run noise. v1.0.1 was cut from `main`, so these behavior changes
+  shipped under a patch version, next to the Go 1.26.8 security rebuild
+  (SEC-008). Its generated release notes hold only the changelog link. Adding a
+  pointer to the README upgrade section is the remaining mitigation, and
+  release notes stay editable on an immutable release.
 - **gosec baseline (v2.29.0, run locally 2026-09-27; non-blocking in CI).**
   Four findings, all reviewed:
   - G115 ×2 (`health-resources_linux.go`, converting `statfs` `Bsize` from
@@ -100,7 +104,7 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
     1.26.0, while the Docker image was built with the builder's 1.26.8.
     `go.mod` is now `go 1.26.8` (released 2026-09-01; the
     `golang:1.26-alpine3.24` image is on 1.26.8 with `GOTOOLCHAIN=local`).
-  - The image now runs as UID 10001. A Docker volume created by 1.0.x holds a
+  - The image now runs as UID 10001. A Docker volume created by 1.0.0 holds a
     root-owned `salus.db` that this user cannot write, so it needs the
     one-time `chown` in the README.
   - No Docker daemon or registry access was available in the analysis
@@ -201,3 +205,5 @@ Decisions recorded 2026-09-27 from the maintainer.
 | Q-007 | Should `.idea/` be ignored (the `.gitignore` line is commented out) or partially tracked? | `.idea/` shows as untracked and includes per-user `workspace.xml`. | **Track.** Done in `460a24b`. `.idea/.gitignore` keeps `workspace.xml` and other per-user files out. |
 | Q-008 | Should CI keep triggering on both `push` to every branch and `pull_request` to every branch? | Same-repo PR branches run CI twice. | **Yes, keep both triggers.** No change. |
 | Q-009 | Should gosec findings gate merges, and at what severity? | See SEC-005. | **No.** gosec stays non-blocking. Findings are triaged in GitHub Code Scanning. |
+| Q-010 | For SEC-006, is GitHub's immutable-release attestation (observed on v1.0.1, verifiable with `gh release verify-asset`) enough, or should releases also get build provenance attestations? | The release attestation shows an asset belongs to the release and was not changed afterwards. It does not show that the workflow built the asset. Build provenance adds `id-token: write` and `attestations: write` to the `release` job. | Open (raised 2026-09-27). |
+| Q-011 | Should CI and CD pin `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26 from 2026-10-19? | Pinning keeps release builds reproducible, but needs manual bumps. Staying on `latest` needs a CD `workflow_dispatch` run after the switch and before the next tag (P2-8). | Open (raised 2026-09-27). |

@@ -85,7 +85,7 @@ authorization plus README and `history.md` updates:
   printing help and exiting 0. Leaf commands declare `Args` (`cobra.NoArgs`,
   `cobra.ExactArgs(1)`).
 - **Environment variable:** `SALUS_DB_PATH` overrides the database path. The
-  default is per-user (Q-002, since the release after 1.0.0; 1.0.x used
+  default is per-user (Q-002, since v1.0.1; v1.0.0 used
   `./salus.db`): `$XDG_DATA_HOME/salus/salus.db` or
   `~/.local/share/salus/salus.db` on Linux and other Unix,
   `~/Library/Application Support/salus/salus.db` on macOS, and
@@ -249,6 +249,16 @@ authorization plus README and `history.md` updates:
   `gomod`, `github-actions`, `docker`, weekly) updates the pins. Tools run with
   `go run tool@version` (for example `govulncheck` in `security.yml`) are not
   seen by Dependabot and must be bumped by hand.
+- Some actions must always move together in one change:
+  - Every `github/codeql-action` sub-action (`init`, `autobuild`, `analyze`,
+    `upload-sarif`). A split bump fails CodeQL with a configuration-version
+    mismatch; this was seen on Dependabot PR #17.
+  - `actions/upload-artifact` and `actions/download-artifact`.
+
+  Dependabot groups them once P2-8 (a) is applied. The artifact actions run
+  only in `cd.yml`, so PR checks do not cover them. Test them with a
+  `workflow_dispatch` CD run; its `Create GitHub Release` step runs only for
+  tags.
 - `security.yml` also runs `govulncheck`, which fails on vulnerabilities
   reachable from Salus code (SEC-005). Unlike gosec, it is blocking.
 - Container image (`Dockerfile`):

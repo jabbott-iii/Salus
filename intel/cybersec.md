@@ -5,8 +5,8 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
-changes).
+Last reviewed: 2026-09-27 (against `b66694a`, tagged v1.0.1, and its GitHub
+Actions runs: CI #49, Docker #15, Security #54, CD #2).
 
 ## Threat model summary
 
@@ -55,6 +55,13 @@ changes).
 - CodeQL (`security-extended`) and gosec run on every push and PR and weekly.
 - The linux release builds are statically linked with
   `sqlite_omit_load_extension`, which disables SQLite extension loading.
+- Since v1.0.1 (`b66694a`):
+  - `govulncheck` runs in `security.yml`, and Dependabot covers `gomod`,
+    `github-actions`, and `docker` (SEC-005).
+  - The container image runs as UID 10001 on digest-pinned bases (SEC-002).
+  - Releases are built with the patched Go toolchain (SEC-008).
+- GitHub marks v1.0.1 as an immutable release with a release attestation
+  (see SEC-006).
 
 Not verified during this review: that each pinned SHA matches its version
 comment, and the current Code Scanning alert state on GitHub.
@@ -94,8 +101,7 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-002: Container image runs as root and base images are not digest-pinned
 
-- **Status:** In Progress (implemented 2026-09-27; awaiting the Docker workflow
-  with the P2-4 workflow patch applied)
+- **Status:** Closed (2026-09-27)
 - **Affected component:** `Dockerfile`, `.github/workflows/docker.yml`
 - **Risk:** Medium. The runtime stage has no `USER` directive, so `salus` runs
   as root. Combined with the README's guidance to mount the Docker socket, a
@@ -111,7 +117,19 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** `docker run --rm --entrypoint id <image>` reports a non-zero
   UID. The `docker.yml` smoke test writes to and reads from the `/app/data`
   volume as that user. Both `FROM` lines contain digests.
-- **Resolution:** Pending CI.
+- **Resolution:** Merged in `b66694a` (v1.0.1). Validated by Docker run #15
+  (36378207180, job 108788270272) on `b66694a`:
+  - The build log resolves both `FROM` lines by digest
+    (`golang:1.26-alpine3.24@sha256:8ac98ca5…` and
+    `alpine:3.24@sha256:294b683c…`).
+  - `Verify non-root user` printed `image user id: 10001`.
+  - The volume smoke test ran as that user: `check run --only misconfig`
+    reported `[PASS]`, and `jobs show 1` read the job back from the
+    `salus-smoke` volume.
+  - Dependabot's `docker` update job ran on the same push (run 36378211944)
+    and opened no PR, because both digests were current.
+
+  Implementation details:
   - The runtime stage creates `salus` (UID/GID 10001), gives it `/app/data`
     (mode 0700, before `VOLUME`, so new named volumes inherit the owner), and
     sets `USER 10001:10001`.
@@ -120,9 +138,9 @@ comment, and the current Code Scanning alert state on GitHub.
     and `alpine:3.24@sha256:294b683c…`, from Docker Hub on 2026-09-27. The
     runtime moved from Alpine 3.22 to 3.24 to match the builder's musl.
   - The README no longer suggests mounting the Docker socket (SEC-007) and
-    documents the one-time `chown` for 1.0.x volumes.
-  - Validation is added to `docker.yml` in the P2-4 patch: a
-    `Verify non-root user` step (`id -u` must not be 0), and the existing
+    documents the one-time `chown` for volumes created by 1.0.0.
+  - Validation is in `docker.yml` (P2-4 patch, merged in `b66694a`): a
+    `Verify non-root user` step (`id -u` must equal 10001), and the existing
     volume smoke test now runs as UID 10001.
   - `hadolint` v2.15.1 reports only DL3018 (unpinned `apk` package versions),
     which the Dockerfile already had. The runtime stage no longer installs any
@@ -131,7 +149,7 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-003: No `.dockerignore`; full working tree is sent to the build context
 
-- **Status:** In Progress (implemented 2026-09-27; awaiting validation)
+- **Status:** In Progress (merged in v1.0.1; awaiting the local `.env` check)
 - **Affected component:** `Dockerfile` (`COPY . .`), repository root
 - **Risk:** Low. Without a `.dockerignore`, the entire directory is sent to the
   builder, including `.git/`, `.idea/`, any local `.env`, and any `*.db` files
@@ -144,12 +162,33 @@ comment, and the current Code Scanning alert state on GitHub.
   `docker.yml` build still succeeds. A test file named `.env` in the tree is
   absent from the builder stage (checked with a temporary `RUN ls -a`
   locally, not committed).
-- **Resolution:** Pending validation. `.dockerignore` excludes `.git`,
+- **Resolution:** Pending the local check. `.dockerignore` excludes `.git`,
   `.github`, `.idea`, `.vscode`, `.devcontainer`, `.junie`, `intel`, `.env*`,
   SQLite files (`*.db`, `-journal`, `-wal`, `-shm`), `dist`, coverage and test
-  outputs, and local `salus` binaries. A Docker daemon was not available in
-  the analysis environment, so the local context check above is still needed.
-  The CI build covers the "build still succeeds" part.
+  outputs, and local `salus` binaries. Merged in `b66694a` (v1.0.1).
+  - Build still succeeds: Docker run #15 (36378207180) on `b66694a` built the
+    image. It sent a 358 B `.dockerignore` and a 159 kB build context.
+  - Supporting evidence (2026-09-27), which is not the documented check: the
+    `.dockerignore` was evaluated with `github.com/moby/patternmatcher`
+    v0.6.1, the parser and matcher BuildKit uses. The input was a copy of the
+    `b66694a` tree plus decoys: `.env`, `.env.local`, `internal/.env`,
+    `salus.db` with `-wal` and `-shm` files, `internal/test.db-journal`,
+    `coverage.out`, `internal/c.test`, `salus`, `salus-ci.exe`, `dist/…`, and
+    `.vscode/…`. Only the 36 source, build, and documentation files would be sent.
+    No decoy, and nothing under `.git`, `.github`, `.idea`, or `intel`, was
+    included.
+  - Still needed: the local check, on a machine with Docker, without editing
+    the Dockerfile. Run these from the repository root:
+
+    ```bash
+    printf 'SEC003_CHECK=1\n' > .env
+    docker build --no-cache --progress=plain --target builder -t salus-ctx-check . 2>&1 | grep 'transferring context'
+    docker run --rm --entrypoint ls salus-ctx-check -a /src   # expect no .env
+    docker image rm salus-ctx-check && rm .env
+    ```
+
+    Neither the analysis environment nor the linked computer's workspace had
+    a Docker daemon available.
 
 ### SEC-004: SQLite database created with default permissions in the working directory
 
@@ -197,8 +236,8 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-005: No dependency vulnerability scanning or update automation
 
-- **Status:** In Progress (implemented 2026-09-27 as a workflow patch; awaiting
-  merge and the validation below)
+- **Status:** In Progress (merged in v1.0.1; awaiting the one-time failing
+  `govulncheck` run)
 - **Affected component:** `.github/workflows/`, `.github/` (no `dependabot.yml`)
 - **Risk:** Low. Nothing runs `govulncheck` against the module graph. SHA-pinned
   actions, Go modules, and Docker base images have no automated update path,
@@ -215,7 +254,36 @@ comment, and the current Code Scanning alert state on GitHub.
   on a known-vulnerable test fixture or version (checked once on a branch).
   Dependabot opens update PRs. The non-blocking gosec policy is documented in
   `maint.md`.
-- **Resolution:** Pending merge of `salus-p24-workflows.patch`.
+- **Resolution:** Merged in `b66694a` (v1.0.1). Two of the three validation
+  points are met:
+  - `govulncheck` executes: Security run #54 (36378207181, job 108788270515)
+    on `b66694a` ran it with Go 1.26.8 and printed `No vulnerabilities found.`
+  - Dependabot opens update PRs: the first `github-actions` run opened #13
+    (`actions/setup-go` 5.6.0 → 7.0.0), #14 (`actions/upload-artifact`
+    4.6.2 → 7.0.1), #15 (`github/codeql-action/upload-sarif` 3.38.1 →
+    4.38.2), #16 (`actions/download-artifact` 4.3.0 → 8.0.1), and #17
+    (`github/codeql-action/autobuild` 3.38.1 → 4.38.2). That is five PRs,
+    Dependabot's default open-PR limit. The `gomod` and `docker` runs
+    succeeded and opened nothing.
+  - The gosec policy is in `maint.md` section 7.
+
+  Still needed: the run must also show `govulncheck` failing once. This is
+  checked on a throwaway branch that is never merged. On that branch, require
+  `github.com/dgrijalva/jwt-go@v3.2.0+incompatible` and add a `package main`
+  file whose `init` calls `jwt.MapClaims{}.VerifyAudience("salus", false)`.
+  That symbol is affected by GO-2020-0017 (CVE-2020-26160), with no fixed v3
+  version, per `golang/vulndb` `data/reports/GO-2020-0017.yaml`. Pushing the
+  branch triggers `security.yml`, which runs on every branch, and the
+  `govulncheck` job should fail with exit code 3. The fixture compiles against
+  v3.2.0; this was checked locally on 2026-09-27. Delete the branch
+  afterwards.
+
+  Operational note: #15 and #17 each bump only one `github/codeql-action`
+  sub-action. #17 fails the CodeQL job (`Loaded a configuration file for
+  version '3.38.1', but running version '4.38.2'`). #15 passes, but it leaves
+  mixed versions. Neither should be merged alone; see `plan.md` P2-8.
+
+  Implementation details:
   - `security.yml` gains a `govulncheck` job with job-level `contents: read`.
     It runs on every push and PR and weekly, and executes
     `go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...`, which exits
@@ -224,9 +292,9 @@ comment, and the current Code Scanning alert state on GitHub.
   - `.github/dependabot.yml` covers `gomod`, `github-actions`, and `docker`
     weekly.
   - The gosec policy is already recorded in `maint.md` section 7.
-  - `govulncheck` could not be run in the analysis environment (the
-    vulnerability database host is blocked), so the first CI run is the
-    first result.
+  - `govulncheck` could not be run in the analysis environment, because the
+    vulnerability database host is blocked. The CI runs are the only
+    `govulncheck` results.
 
 ### SEC-006: Release artifacts are not signed and have no provenance
 
@@ -245,10 +313,21 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** Verification of one release artifact succeeds with the
   documented command, and verification of a modified artifact fails.
 - **Resolution:** None yet.
+  - Observed 2026-09-27: GitHub shows v1.0.1 as an **Immutable** release with
+    a "Release attestation (json)" asset. Its assets cannot be replaced after
+    publication. The release attestation binds the asset digests to the
+    release, so it can be checked with
+    `gh release verify-asset v1.0.1 <file>` (GitHub CLI; not run here).
+  - This addresses tampering after publication. It does not show that the
+    workflow built the binaries: the release attestation covers release
+    membership, not build provenance. The required remediation above still
+    stands.
+  - Whether the immutable-release attestation is an acceptable substitute is
+    a maintainer decision; it is not assumed here.
 
 ### SEC-007: README recommends mounting the Docker socket into the container
 
-- **Status:** In Progress (README updated 2026-09-27; awaiting the CI assertion)
+- **Status:** Closed (2026-09-27)
 - **Affected component:** `README.md` ("Docker" section), `Dockerfile`
 - **Risk:** Low (documentation). Mounting `/var/run/docker.sock` gives the
   container root-equivalent control of the host (compounded by SEC-002). The
@@ -264,18 +343,29 @@ comment, and the current Code Scanning alert state on GitHub.
   image.
 - **Validation:** README review. `docker run` of the image, with and without
   the socket mount, matches the documented behavior.
-- **Resolution:** Pending CI. The README Docker section now says the
-  `docker-status` and `kubernetes-status` checks are unsupported in the image
-  (they report `WARN`), recommends running the binary on the host, and warns
-  against mounting the Docker socket. The P2-4 patch adds a `docker.yml` step
-  that asserts both checks report `WARN` with "CLI not found in PATH" inside
-  the image. No socket is involved: the result does not depend on a socket,
-  because the CLIs are absent.
+- **Resolution:** Merged in `b66694a` (v1.0.1). The README Docker section
+  says the `docker-status` and `kubernetes-status` checks are unsupported in
+  the image (they report `WARN`), recommends running the binary on the host,
+  and warns against mounting the Docker socket. It was reviewed against the
+  code on 2026-09-27.
+  - **Without the socket:** Docker run #15 (36378207180) on `b66694a` passed
+    `Smoke test unsupported in-container checks`. Exit code 1, with `WARN` and
+    `docker CLI not found in PATH` / `kubectl CLI not found in PATH`.
+  - **With the socket:** not run with the image, because no Docker daemon was
+    available, and the README advises against mounting the socket. It was
+    validated in two ways instead:
+    - `checkDockerStatus` and `checkKubernetesStatus` return `WARN` from
+      `hasTool` before any socket, `DOCKER_HOST`, or kubeconfig is used,
+      which is covered by `internal/checks_test.go`.
+    - The released v1.0.1 `salus_linux_amd64` binary (SHA-256 verified
+      against `checksums.txt`) was run with a listening Unix socket at
+      `/var/run/docker.sock`, with `DOCKER_HOST` set, with a kubeconfig in
+      `$HOME/.kube`, and with neither CLI on `PATH`. It gave the same two
+      `WARN` results and exit code 1.
 
 ### SEC-008: Release binaries built with an outdated Go patch release
 
-- **Status:** In Progress (fixed in the working tree 2026-09-27; awaiting CI and
-  a new release)
+- **Status:** Closed (2026-09-27)
 - **Affected component:** `go.mod` (`go` directive); `.github/workflows/cd.yml`
   and `ci.yml` (`setup-go` with `go-version-file: go.mod`); the v1.0.0 release
   archives
@@ -293,6 +383,20 @@ comment, and the current Code Scanning alert state on GitHub.
 - **Validation:** The CI and CD logs show `go version go1.26.8`. The
   `govulncheck` job passes. `go version -m` on a new release binary reports
   `go1.26.8`.
-- **Resolution:** Pending. `go.mod` is now `go 1.26.8`. Locally, tests pass
-  and `go version -m` on the built binary reports `go1.26.8`. It still needs a
-  CI run and a new release.
+- **Resolution:** Fixed in `b66694a` (`go.mod` `go 1.26.8`) and released as
+  v1.0.1 on 2026-09-27:
+  - CI #49 (36378207188) on `b66694a`: `Setup go version spec 1.26.8`,
+    `go version go1.26.8 linux/amd64`, tests and golangci-lint pass.
+  - CD #2 (36378369985, tag `v1.0.1`), `Build linux/amd64` job
+    108788751088: `go version go1.26.8`. All six build jobs and
+    `Package and Release` succeeded.
+  - Security #54 (36378207181): the `govulncheck` job used Go 1.26.8 and
+    found no vulnerabilities.
+  - Release binary: `salus_linux_amd64.tar.gz` from the v1.0.1 release
+    matched `checksums.txt`. The `checksums.txt` SHA-256 `d0872c3c…` equals
+    the digest GitHub shows for it. `go version -m` on the binary reports
+    `go1.26.8`, `mod github.com/jabbott-iii/Salus v1.0.1`, and tags
+    `sqlite_omit_load_extension,osusergo,netgo`. `--version` prints
+    `salus version v1.0.1`.
+  - Users on v1.0.0 archives should upgrade to v1.0.1 or later. v1.0.1 also
+    carries behavior changes (see `notes.md`, "Upgrade impact").

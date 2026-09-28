@@ -4,13 +4,16 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-27 (against `753252e` plus uncommitted P2-3/P2-4/P2-5
-changes). Decisions on Q-001 to Q-009 are recorded in `notes.md`.
+Last reviewed: 2026-09-27 (against `b66694a`, tagged v1.0.1, and its GitHub
+Actions runs: CI #49, Docker #15, Security #54, CD #2). Decisions on Q-001 to
+Q-009 are recorded in `notes.md`; Q-010 and Q-011 are open.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
 `In Progress`, `Blocked`, `Awaiting merge` (delivered as a patch for the
 maintainer to apply, for example for `.github/`), `Awaiting CI` (implemented
-and validated locally, waiting for a GitHub Actions run), `Done`.
+and validated locally, waiting for a GitHub Actions run), `Awaiting maintainer
+check` (merged and CI-validated; one validation step needs something only the
+maintainer has, such as a Docker daemon or a branch push), `Done`.
 
 ## Baseline (verified 2026-09-27)
 
@@ -107,11 +110,12 @@ Order by risk and effort. Update `cybersec.md` status as each item moves.
 |---|---|---|---|
 | P2-1 | SEC-001: validate `--service` and pass `--` to `systemctl`. | P1-8 (runner injection makes the test clean) Implemented 2026-09-27. See SEC-001 resolution. Merged in `753252e`: CI #48, Docker #14, and Security #53 green. SEC-001 Closed. | Done |
 | P2-2 | SEC-004: create the DB file with `0600`, check the effective DB path in `misconfig` (including read bits), and bound message length. | P1-3, P1-5 Implemented 2026-09-27 together with P1-10. See SEC-004 resolution. Merged in `753252e`: CI #48, Docker #14, and Security #53 green. SEC-004 Closed. | Done |
-| P2-3 | SEC-002 and SEC-003: non-root container user, digest-pinned base images, `.dockerignore`. | P0-4 Implemented 2026-09-27: UID 10001 `salus` user owns `/app/data` (0700), both stages are digest-pinned on Alpine 3.24, and `.dockerignore` was added. The non-root assertion is in the P2-4 workflow patch. The local `.env` context check for SEC-003 is still open (no Docker daemon was available). | Awaiting CI |
-| P2-4 | SEC-005: `govulncheck` in CI and `.github/dependabot.yml` (gomod, github-actions, docker). gosec stays non-blocking (Q-009), and that policy is recorded in `maint.md`. | none Delivered as `salus-p24-workflows.patch`, because the remote session cannot write `.github/`: a `govulncheck@v1.8.0` job in `security.yml`, `.github/dependabot.yml` (gomod, github-actions, docker), and new `docker.yml` assertions. Checked with actionlint and simulated steps; `git apply --check` passes against `753252e`. | Awaiting merge |
-| P2-5 | SEC-007: README container guidance. | P4-1 Done ahead of P4-1: the README Docker section rewritten (unsupported in-container checks, no socket mount, bind-mount ownership, 1.0.x volume upgrade). CI assertion in the P2-4 patch. | Awaiting CI |
-| P2-6 | SEC-006: release provenance or signing. | P0-3 | Proposed |
-| P2-7 | SEC-008: build with the latest Go patch release. `go.mod` `go 1.26.0` → `go 1.26.8`, because CI and CD install exactly the `go.mod` version. Then cut a release so users get a patched binary. | P2-4 (`govulncheck`) | Awaiting CI |
+| P2-3 | SEC-002 and SEC-003: non-root container user, digest-pinned base images, `.dockerignore`. | P0-4 Implemented 2026-09-27: UID 10001 `salus` user owns `/app/data` (0700), both stages are digest-pinned on Alpine 3.24, and `.dockerignore` was added. Merged in `b66694a` (v1.0.1). Docker #15 is green, with UID 10001 asserted, so SEC-002 is Closed. The `.dockerignore` passed a BuildKit-matcher check with decoy files. SEC-003 stays In Progress until the maintainer runs the four-command local `.env` check in `cybersec.md`. | Awaiting maintainer check |
+| P2-4 | SEC-005: `govulncheck` in CI and `.github/dependabot.yml` (gomod, github-actions, docker). gosec stays non-blocking (Q-009), and that policy is recorded in `maint.md`. | none Delivered as `salus-p24-workflows.patch`, because the remote session cannot write `.github/`: a `govulncheck@v1.8.0` job in `security.yml`, `.github/dependabot.yml` (gomod, github-actions, docker), and new `docker.yml` assertions. Merged in `b66694a` (v1.0.1). Security #54 ran `govulncheck`, which found no vulnerabilities. Dependabot opened #13 to #17. Remaining for SEC-005: one failing `govulncheck` run on a throwaway branch (fixture in `cybersec.md`). | Awaiting maintainer check |
+| P2-5 | SEC-007: README container guidance. | P4-1 Done ahead of P4-1: the README Docker section rewritten (unsupported in-container checks, no socket mount, bind-mount ownership, 1.0.0 volume upgrade). The CI assertion passed in Docker #15. The socket case was checked with the released binary. SEC-007 Closed. | Done |
+| P2-6 | SEC-006: release provenance or signing. | P0-3 Note: v1.0.1 is an immutable GitHub release with a release attestation (`gh release verify-asset`). That covers tampering after publication, but not build provenance; see SEC-006. Decide whether to add build provenance (`actions/attest-build-provenance` in the `release` job) or accept the release attestation (Q-010). | Proposed |
+| P2-7 | SEC-008: build with the latest Go patch release. `go.mod` `go 1.26.0` → `go 1.26.8`, because CI and CD install exactly the `go.mod` version. Then cut a release so users get a patched binary. | P2-4 (`govulncheck`) Released as v1.0.1 (CD #2). CI and CD logs show go1.26.8, and `go version -m` on the released linux/amd64 binary reports go1.26.8. SEC-008 Closed. | Done |
+| P2-8 | GitHub Actions maintenance, surfaced by the first Dependabot run and v1.0.1 annotations. (a) Group coupled actions in `.github/dependabot.yml`: every `github/codeql-action` sub-action, and `actions/upload-artifact` with `actions/download-artifact`. Delivered as `salus-p28-dependabot.patch`. Today #15 and #17 bump single CodeQL sub-actions, and #17 fails CodeQL. (b) Move `github/codeql-action` to v4 as one group before its v3 deprecation in December 2026, per the CodeQL annotation. (c) Take the Node 24 majors of `actions/checkout` and `actions/setup-go`: v4.4.0 and v5.6.0 target Node 20, and runners already force them onto Node 24 (warning). (d) `upload-artifact` and `download-artifact` run only in `cd.yml`, so PR checks do not exercise #14 or #16. Run CD with `workflow_dispatch` on their branch first; the release step runs only for tags. (e) `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19, per the runner annotation. Run CD with `workflow_dispatch` after that date and before the next tag, or pin `ubuntu-24.04` (Q-011). | P2-4 Acceptance: one grouped CodeQL v4 PR passes Security, and a `workflow_dispatch` CD run on the artifact-action branch packages six archives. The Security, CI, CD, and Docker annotations no longer show the Node 20 warning. | Awaiting merge |
 
 ## Phase 3: Feature completeness
 
@@ -139,7 +143,7 @@ needs tests without host dependence (P1-8) and README updates.
 | P4-3 | Add an explicit `.golangci.yml` so the linter set does not drift with golangci-lint defaults. | Proposed |
 | P4-4 | Add `SECURITY.md` with a vulnerability reporting channel. Needs maintainer input on the channel. | Proposed |
 | P4-5 | Resolve `.idea/` handling (Q-007). Add issue and PR templates that match `CONTRIBUTING.md`'s issue-first rule. | Proposed |
-| P4-6 | Dockerfile cleanup: fix the stale "rete.db" and "TUI" comments, and use `TARGETARCH` instead of a hard-coded `GOARCH=amd64`. Check whether `sqlite-libs` is needed at runtime (go-sqlite3 bundles SQLite unless built with the `libsqlite3` tag) using `ldd` before removing it. Stale comments and `TARGETARCH` done 2026-09-27 with P2-3. Update 2026-09-27: `sqlite-libs` and `ca-certificates` removed; unneeded per the go-sqlite3 source. The Docker smoke tests confirm the binary still runs. | Awaiting CI |
+| P4-6 | Dockerfile cleanup: fix the stale "rete.db" and "TUI" comments, and use `TARGETARCH` instead of a hard-coded `GOARCH=amd64`. Check whether `sqlite-libs` is needed at runtime (go-sqlite3 bundles SQLite unless built with the `libsqlite3` tag) using `ldd` before removing it. Stale comments and `TARGETARCH` done 2026-09-27 with P2-3. Update 2026-09-27: `sqlite-libs` and `ca-certificates` removed; unneeded per the go-sqlite3 source. Docker #15 on `b66694a` is green, and the binary runs and persists to the volume without them. | Done |
 
 ## Phase 5: Structure (optional, needs explicit approval)
 
@@ -153,17 +157,19 @@ needs tests without host dependence (P1-8) and README updates.
 1. **M1, green pipeline:** Done. CI, Docker, and Security are green on
    `0d3b91a`, and the CD workflow (P0-3) published v1.0.0 from `231487a`.
 2. **M2, testable core:** Done. P1-1 to P1-9 and P1-11 shipped in `0d3b91a`, and CI
-   is green on all three operating systems. P1-10 is implemented and awaiting CI.
-3. **M3, hardened:** P2-1 and P2-2 are done (SEC-001 and SEC-004 closed). P2-3 and
-   P2-5 are implemented and awaiting the Docker workflow. P2-4 is delivered as a
-   workflow patch. After merge, confirm the Docker, Security (`govulncheck`), and
-   Dependabot results, then close SEC-002, SEC-003, SEC-005, and SEC-007.
+   is green on all three operating systems. P1-10 shipped in `753252e`.
+3. **M3, hardened:** Mostly done. SEC-001, SEC-002, SEC-004, SEC-007, and SEC-008
+   are Closed. Two maintainer-only checks remain: the local `.env` build-context
+   check (SEC-003) and one failing `govulncheck` run on a throwaway branch
+   (SEC-005). The exact steps are in `cybersec.md`.
 4. **M4, release hardening:** v1.0.0 was released on 2026-09-27 (before M3).
-   Ship P1-10, P2-1, P2-2, P2-3, and P2-7 as the next release with the README
-   upgrade notes (a minor or major bump is the maintainer's call; see
-   `notes.md`). The image now runs as UID 10001, and 1.0.x Docker volumes need
-   the documented one-time `chown`. Because v1.0.0 binaries were built with Go
-   1.26.0 (SEC-008), consider also a v1.0.1 from the v1.0.0 tag with only the
-   `go.mod` bump, for users who cannot take the behavior changes yet. Then
-   P4-1, P4-2, P2-6, and P3-1.
+   v1.0.1 followed the same day from `b66694a` on `main`. It carries P1-10,
+   P2-1 to P2-5, P2-7, and P4-6, not only the Go bump. Its behavior changes
+   (per-user database location, `0600` warning, `--service` validation,
+   non-root image) are documented in the README ("Upgrading from 1.0.0").
+   However, the generated release notes contain only the changelog link, and
+   release notes stay editable on an immutable release. Next: P2-8 first,
+   because it has dates (the Ubuntu 26 runner switch on 2026-10-19 and the
+   CodeQL Action v3 deprecation in December 2026). Then P4-1, P4-2, P2-6, and
+   P3-1.
 5. **M5, depth:** P3-2 through P3-6, then P3-7 and P3-8 per decisions.

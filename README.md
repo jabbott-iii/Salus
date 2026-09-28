@@ -146,21 +146,21 @@ Salus creates a new database file with mode `0600` and any missing parent
 directories with mode `0700`. The `misconfig` check warns if the database file
 is readable or writable by group or other users (on Linux and macOS).
 
-### Upgrading from 1.0.x
+### Upgrading from 1.0.0
 
-- **Database location:** 1.0.x created `salus.db` in the current working
-  directory. Newer versions no longer read that file by default. To keep your
-  job history, move it to the location above, or set
+- **Database location:** 1.0.0 created `salus.db` in the current working
+  directory. Since 1.0.1, Salus no longer reads that file by default. To keep
+  your job history, move it to the location above, or set
   `SALUS_DB_PATH=/path/to/salus.db`.
-- **Database permissions:** databases created by 1.0.x are usually readable by
+- **Database permissions:** databases created by 1.0.0 are usually readable by
   other users (mode `0644`), which now makes `misconfig` report `WARN` (exit
   code `1`). Restrict the file with `chmod 600 /path/to/salus.db`.
 - **`--service` values** must be systemd unit names (letters, digits, and
   `:-_.\@`, not starting with `-`). Other values fail the `service-uptime`
   check without running `systemctl`.
-- **Docker volumes:** the 1.0.x image ran as root, so a database it created in
-  the `/app/data` volume is owned by root. The image now runs as UID 10001, so
-  hand the existing data over once:
+- **Docker volumes:** the 1.0.0 image ran as root, so a database it created in
+  the `/app/data` volume is owned by root. Since 1.0.1 the image runs as UID
+  10001, so hand the existing data over once:
 
   ```bash
   docker run --rm --user 0 --entrypoint sh -v salus-data:/app/data salus \
@@ -188,9 +188,9 @@ Note:
  - Database state is persisted in `/app/data`. A new named volume, as in the
    example above, is writable by the container automatically. For a bind
    mount, make the host directory writable by UID `10001` first (for example
-   `sudo chown 10001:10001 /path/to/data`). A volume created by Salus 1.0.x
+   `sudo chown 10001:10001 /path/to/data`). A volume created by Salus 1.0.0
    needs a one-time ownership fix (see
-   [Upgrading from 1.0.x](#upgrading-from-10x)).
+   [Upgrading from 1.0.0](#upgrading-from-100)).
  - The `docker-status` and `kubernetes-status` checks are not supported inside
    the container. The image does not include the `docker` or `kubectl` CLIs,
    so those checks report `WARN` (`... CLI not found in PATH`). Run the

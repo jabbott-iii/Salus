@@ -258,3 +258,55 @@ reconstructed from commit messages and diffs, not first-hand records.
   new `govulncheck` job would likely fail on Go 1.26.0. Verifying that in the
   CI log turned up SEC-008. A new release is recommended (`plan.md` M4).
   Uncommitted at the time of writing.
+
+## 2026-09-27: v1.0.1 released
+
+- Change: Tagged `v1.0.1` at `b66694a` on `main`. CD #2 published six
+  archives plus `checksums.txt` as an immutable GitHub Release with a release
+  attestation. v1.0.1 carries everything since v1.0.0 (`753252e` and
+  `b66694a`):
+  - The per-user database location with lazy opening (P1-10).
+  - SEC-001 and SEC-004.
+  - The non-root, digest-pinned image with `.dockerignore`.
+  - `govulncheck` and Dependabot.
+  - Go 1.26.8 (SEC-008).
+
+  CI #49, Docker #15, and Security #54 were green on `b66694a`.
+- Files: none (tag and release only)
+- Reason / reference: Security rebuild for SEC-008. It also shipped the
+  behavior changes described in the README, "Upgrading from 1.0.0".
+
+## 2026-09-27: v1.0.1 validation recorded; SEC-002, SEC-007, SEC-008 closed
+
+- Change:
+  - Recorded the GitHub Actions evidence for `b66694a` and v1.0.1 in
+    `intel/cybersec.md`:
+    - SEC-002, SEC-007, and SEC-008 are Closed.
+    - SEC-003 and SEC-005 remain In Progress, each pending one
+      maintainer-only check. The steps are documented.
+    - SEC-006 notes the immutable-release attestation.
+  - Plan updates:
+    - P2-5, P2-7, and P4-6 are Done.
+    - P2-3 and P2-4 are Awaiting maintainer check, a new status value.
+    - Added P2-8 (GitHub Actions maintenance).
+  - Added open questions Q-010 (release attestation versus build provenance)
+    and Q-011 (runner pinning).
+  - Because v1.0.1 already carries the behavior changes, the README
+    "Upgrading from 1.0.x" section is now "Upgrading from 1.0.0", and 1.0.x
+    wording in `maint.md` and `notes.md` now says 1.0.0. Earlier history
+    entries keep their original wording.
+  - `maint.md` section 7 records which actions must move together.
+  - `.github/dependabot.yml` groups the `github/codeql-action` sub-actions
+    and the artifact actions. This is delivered as
+    `salus-p28-dependabot.patch`, because the remote session cannot write
+    `.github/`.
+- Files: `README.md`, `intel/cybersec.md`, `intel/plan.md`, `intel/notes.md`,
+  `intel/maint.md`, `intel/history.md`; via patch: `.github/dependabot.yml`
+- Reason / reference: Validation of the v1.0.1 release (plan M3 and M4), and
+  the first Dependabot run.
+  - Dependabot split the CodeQL Action v4 bump across #15 and #17, and #17
+    fails CodeQL.
+  - The run annotations flag three dated deprecations: Node 20 actions,
+    CodeQL Action v3 (December 2026), and the `ubuntu-latest` move to
+    Ubuntu 26 (2026-10-19).
+  - Uncommitted at the time of writing.
