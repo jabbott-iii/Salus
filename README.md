@@ -130,7 +130,8 @@ Then add the directory containing `salus.exe` to your `PATH`.
 Releases after 1.0.1 include a signed build provenance attestation for every
 archive. Verify an archive with GitHub CLI 2.97 or newer (older versions have
 a verification bypass, GHSA-mm27-mwq9-fr5g), replacing `vX.Y.Z` with the tag
-of the release you downloaded:
+of the release you downloaded (for example `v1.0.2`). The command needs a
+GitHub login (`gh auth login`), even though the repository is public:
 
 ```bash
 gh attestation verify salus_linux_amd64.tar.gz --repo jabbott-iii/Salus \

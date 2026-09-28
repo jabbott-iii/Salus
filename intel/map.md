@@ -3,8 +3,7 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-27 (against `78db94e` plus the uncommitted P2-6, P2-8,
-P3-1, P4-1, and P4-2 changes).
+Last reviewed: 2026-09-28 (against `2fd2496`; v1.0.2 is tagged at `08b2faa`).
 
 ## Directory structure
 

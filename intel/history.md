@@ -399,3 +399,36 @@ reconstructed from commit messages and diffs, not first-hand records.
     - govulncheck v1.8.0.
     - 13 of 13 targeted mutations caught.
   - Uncommitted at the time of writing.
+
+## 2026-09-28: v1.0.2 released with build provenance; Dependabot action updates merged; SEC-006 closed
+
+- Change:
+  - The changes in the two previous entries were committed as `08b2faa` and
+    tagged `v1.0.2`. CD #3 (36397627324) did the following:
+    - built the six archives, with the linux/amd64 build and both release
+      jobs on `ubuntu-24.04`;
+    - attested them in the `package` job (6 subjects, Rekor log index
+      2981647855);
+    - published an immutable GitHub Release.
+  - CI #69, Security #74, and Docker #26 were green on `08b2faa`, and the new
+    `check run` tests passed on Linux, macOS, and Windows.
+  - Dependabot PRs #18, #20, #21, #13, and #19 were merged after the tag
+    (`2fd2496`). CI #76, Security #81, and Docker #32 there show no Node 20 or
+    CodeQL v3 annotations. v1.0.2 itself was built with the earlier
+    `checkout`, `setup-go`, and binary-artifact pins.
+  - The v1.0.2 release notes were edited to describe the threshold flags, the
+    provenance check, and the 1.0.0 upgrade steps. The seven release assets
+    are unchanged.
+  - SEC-006 closed. The documented `gh attestation verify` command, run with
+    GitHub CLI 2.101.0, passes for `salus_linux_amd64.tar.gz`. It fails for a
+    modified copy and for `--source-ref refs/heads/main`. The README now
+    notes that the command needs a GitHub login.
+  - Plan: P2-6, P3-1, P4-1, and P4-2 are Done. P2-8 awaits one CD run at
+    `2fd2496` or later.
+- Files: none for the release. This update: `README.md`,
+  `intel/cybersec.md`, `intel/plan.md`, `intel/notes.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/history.md`
+- Reason / reference: plan milestone M4, step 5, and the SEC-006 validation.
+  - The maintainer approved the archive download and the release-notes edit
+    for this session.
+  - Uncommitted at the time of writing.

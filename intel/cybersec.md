@@ -5,8 +5,8 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against `78db94e`, open Dependabot PRs #13 and #18
-to #21, and the uncommitted P2-6 and P2-8 workflow changes).
+Last reviewed: 2026-09-28 (against `2fd2496`, and v1.0.2 at `08b2faa` with its
+CD run #3).
 
 ## Threat model summary
 
@@ -75,8 +75,8 @@ to #21, and the uncommitted P2-6 and P2-8 workflow changes).
   commits only, and a passing CodeQL code scanning check. Branch and tag
   deletion and force pushes are blocked. The repository admin role can
   bypass them.
-- In the uncommitted working tree (P2-6), the CD `package` job attests build
-  provenance for every release archive. It is the only job with
+- Since v1.0.2 (`08b2faa`), the CD `package` job attests build provenance for
+  every release archive. It is the only job with
   `id-token: write` and `attestations: write`, and it runs only first-party
   actions. The third-party release action runs in the separate `release` job,
   which has `contents: write` but cannot sign.
@@ -330,8 +330,7 @@ GitHub, because the available token cannot read it.
 
 ### SEC-006: Release artifacts are not signed and have no provenance
 
-- **Status:** In Progress (implemented in the working tree; awaiting merge, a
-  manual CD run, and the next release)
+- **Status:** Closed (2026-09-28)
 - **Affected component:** `.github/workflows/cd.yml` (`release` job)
 - **Risk:** Low. `checksums.txt` is produced in the same job and published
   next to the artifacts. It detects corruption but not tampering, because an
@@ -345,7 +344,8 @@ GitHub, because the available token cannot read it.
   the verification command in `README.md`.
 - **Validation:** Verification of one release artifact succeeds with the
   documented command, and verification of a modified artifact fails.
-- **Resolution:** None yet.
+- **Resolution:** Closed 2026-09-28, after the validation on v1.0.2 described at
+  the end of this item.
   - Observed 2026-09-27: GitHub shows v1.0.1 as an **Immutable** release with
     a "Release attestation (json)" asset. Its assets cannot be replaced after
     publication. The release attestation binds the asset digests to the
@@ -359,8 +359,8 @@ GitHub, because the available token cannot read it.
     a maintainer decision; it is not assumed here.
   - **Decision (2026-09-27, Q-010):** add build provenance. The release
     attestation alone is not accepted as a substitute.
-  - **Implementation (uncommitted):** `cd.yml` splits the old `release` job
-    in two.
+  - **Implementation (merged in `08b2faa`, released in v1.0.2):** `cd.yml`
+    splits the old `release` job in two.
     - `package` ("Package and attest") downloads the binaries, packages them,
       writes `checksums.txt`, and runs `actions/attest` v4.2.2 (pinned at
       `1e69f48a…`) with `subject-checksums: dist/checksums.txt`, so all six
@@ -408,15 +408,27 @@ GitHub, because the available token cannot read it.
     - The multi-path upload and the by-name download place the files directly
       in `dist/`, per the upload-artifact v7.0.1 README (least common ancestor
       as the root) and the download-artifact v8.0.1 README.
-  - **Remaining validation:**
-    1. After merge, a manual CD run shows the attestation step succeeding for
-       six subjects and the `release` job downloading `release-archives`.
-    2. Optionally, verify an archive from that run's `release-archives`
-       artifact, using `--source-ref` with the branch ref (for example
-       `refs/heads/main`).
-    3. After the next tag, the documented command succeeds for a downloaded
-       archive and fails for a modified copy.
-    4. Then close.
+  - **Validation (2026-09-28, v1.0.2):**
+    - CD #3 (36397627324, tag `v1.0.2` at `08b2faa`) ran the `package` job,
+      which logged `Attestation created for 6 subjects` (Rekor log index
+      2981647855; `https://github.com/jabbott-iii/Salus/attestations/50705519`).
+      The `release` job downloaded `release-archives` and published the
+      immutable release.
+    - The SLSA statement's six subjects match the six release asset digests
+      exactly. Its certificate (issuer `sigstore-intermediate`) names
+      `https://github.com/jabbott-iii/Salus/.github/workflows/cd.yml@refs/tags/v1.0.2`
+      as the signer, with source ref `refs/tags/v1.0.2`.
+    - The documented command, run with GitHub CLI 2.101.0 (built from source,
+      isolated configuration) on `salus_linux_amd64.tar.gz` (which matched
+      `checksums.txt`), exited 0. It reported SLSA provenance v1, source
+      commit `08b2faae…`, a GitHub-hosted runner, and one verified
+      transparency-log timestamp.
+    - A copy with one byte appended failed (exit 1; the API has no attestation
+      for its digest).
+    - The real archive with `--source-ref refs/heads/main` failed (exit 1:
+      `expected SourceRepositoryRef to be refs/heads/main, got refs/tags/v1.0.2`).
+    - `gh attestation verify` needs an authenticated GitHub CLI even for this
+      public repository, so the README now says so.
 
     The v1.0.0 and v1.0.1 archives stay without build provenance.
 
@@ -498,4 +510,6 @@ GitHub, because the available token cannot read it.
   - No regression from Dependabot PR #13 (2026-09-27): it moves
     `actions/setup-go` from 5.6.0 to 7.0.0, and v6 changed toolchain
     selection. Its CI logs on all three operating systems still show
+    `Setup go version spec 1.26.8` and `go version go1.26.8`.
+  - v1.0.2 (2026-09-28): the CD #3 `Build linux/amd64` log shows
     `Setup go version spec 1.26.8` and `go version go1.26.8`.

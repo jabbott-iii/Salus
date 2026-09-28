@@ -3,8 +3,7 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-27 (against `78db94e`, plus the uncommitted P2-6, P2-8,
-P3-1, P4-1, and P4-2 changes recorded in `history.md`).
+Last reviewed: 2026-09-28 (against `2fd2496`, and v1.0.2 at `08b2faa`).
 
 ## Engineering notes
 
@@ -73,7 +72,10 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   shipped under a patch version, next to the Go 1.26.8 security rebuild
   (SEC-008). Its generated release notes hold only the changelog link. Adding a
   pointer to the README upgrade section is the remaining mitigation, and
-  release notes stay editable on an immutable release.
+  release notes stay editable on an immutable release. *Update 2026-09-28:*
+  the v1.0.2 release notes point to the upgrade section and also describe the
+  threshold flags and the provenance check. v1.0.1's notes still hold only the
+  changelog link.
 - **gosec baseline (v2.29.0, run locally 2026-09-27; non-blocking in CI).**
   Four findings, all reviewed:
   - G115 ×2 (`health-resources_linux.go`, converting `statfs` `Bsize` from
@@ -206,6 +208,14 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
     cannot be reused.
   - The repository admin role and some GitHub Apps can bypass both. That is why
     the Dependabot PRs show `BLOCKED` until they are approved.
+- **Tag placement (2026-09-28).**
+  - v1.0.2 was tagged at `08b2faa`, before the Dependabot PRs were merged at
+    `2fd2496`.
+  - CD #3 therefore still used `checkout` v4.4.0, `setup-go` v5.6.0, and the
+    v4 artifact actions for the binaries. Its build jobs carry Node 20
+    warnings, and the bumped pins have not run in CD yet.
+  - When a release should exercise workflow updates, merge them before
+    tagging, or run CD manually on `main` first.
 - **Ubuntu 26.04.** `ubuntu-latest` moves to Ubuntu 26.04 in a rollout from
   2026-10-19 to 2026-11-19 (actions/runner-images#14748). During the rollout a
   job may land on either image. CD is pinned to 24.04 (Q-011).
@@ -242,6 +252,14 @@ from source into a scratch directory. Limits:
 - The fine-grained token cannot dispatch workflows (HTTP 403 on
   `workflow_dispatch`), read Code Scanning alerts, or read branch protection.
 - The installed GitHub CLI (2.45.0) predates `gh attestation`.
+
+On 2026-09-28, to validate SEC-006:
+- GitHub CLI 2.101.0 was built from source into the scratch directory. It was
+  run with its own `GH_CONFIG_DIR` and XDG directories, so the installed
+  2.45.0 configuration was not touched.
+- `gh attestation verify` refuses to run without authentication, even for a
+  public repository (exit 4). The existing login's token was passed through
+  the environment for those read-only calls and never printed.
 
 ### Verification environment (2026-09-27 analysis)
 The analysis environment could not reach `proxy.golang.org` or `go.dev`. The
