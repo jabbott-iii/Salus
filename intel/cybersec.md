@@ -5,8 +5,8 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-27 (against `b66694a`, tagged v1.0.1, and its GitHub
-Actions runs: CI #49, Docker #15, Security #54, CD #2).
+Last reviewed: 2026-09-27 (against `78db94e`, open Dependabot PRs #13 and #18
+to #21, and the uncommitted P2-6 and P2-8 workflow changes).
 
 ## Threat model summary
 
@@ -40,6 +40,9 @@ Actions runs: CI #49, Docker #15, Security #54, CD #2).
 9. In workflows, pass values derived from refs, tags, or other user-controlled
    inputs into `run:` scripts through `env:` variables, not inline `${{ }}`
    interpolation. The release smoke step's version check follows this rule.
+10. Jobs that hold `id-token: write` run only first-party actions
+    (`actions/*`). Any step in such a job can mint signing credentials for the
+    workflow, so a third-party action there could forge provenance (SEC-006).
 
 ## Existing controls observed
 
@@ -62,9 +65,24 @@ Actions runs: CI #49, Docker #15, Security #54, CD #2).
   - Releases are built with the patched Go toolchain (SEC-008).
 - GitHub marks v1.0.1 as an immutable release with a release attestation
   (see SEC-006).
+- Pinned action SHAs match their version comments (checked 2026-09-27 by
+  resolving each tag through the GitHub API, dereferencing annotated tags).
+  This covers every pin on `main`, the pins in Dependabot PRs #13 and #18 to
+  #21, and the new pins for `actions/attest` v4.2.2 (`1e69f48a…`) and
+  `softprops/action-gh-release` v3.0.3 (`efb35369…`). Both new pins are
+  signed commits.
+- Branch rulesets require a pull request with a code-owner approval, merge
+  commits only, and a passing CodeQL code scanning check. Branch and tag
+  deletion and force pushes are blocked. The repository admin role can
+  bypass them.
+- In the uncommitted working tree (P2-6), the CD `package` job attests build
+  provenance for every release archive. It is the only job with
+  `id-token: write` and `attestations: write`, and it runs only first-party
+  actions. The third-party release action runs in the separate `release` job,
+  which has `contents: write` but cannot sign.
 
-Not verified during this review: that each pinned SHA matches its version
-comment, and the current Code Scanning alert state on GitHub.
+Not verified during this review: the current Code Scanning alert state on
+GitHub, because the available token cannot read it.
 
 ## Issues
 
@@ -278,10 +296,24 @@ comment, and the current Code Scanning alert state on GitHub.
   v3.2.0; this was checked locally on 2026-09-27. Delete the branch
   afterwards.
 
+  Supporting evidence (2026-09-27), which is not the documented check:
+  - In a scratch copy of the tree with that fixture, `govulncheck` v1.8.0 (the
+    version `security.yml` pins) exited 3 and reported GO-2020-0017 in
+    `github.com/dgrijalva/jwt-go@v3.2.0+incompatible`.
+  - For the unmodified tree it reported `No vulnerabilities found.`
+  - The branch rulesets block branch deletion, but the repository admin role
+    can bypass them, so the maintainer can delete the throwaway branch.
+  - The agent session could not push the branch itself, because `AGENTS.md`
+    forbids it from creating commits.
+
   Operational note: #15 and #17 each bump only one `github/codeql-action`
   sub-action. #17 fails the CodeQL job (`Loaded a configuration file for
   version '3.38.1', but running version '4.38.2'`). #15 passes, but it leaves
   mixed versions. Neither should be merged alone; see `plan.md` P2-8.
+  Resolved 2026-09-27: after the grouping in `78db94e`, Dependabot closed #14
+  to #17 and opened #18, which moves all four `github/codeql-action`
+  sub-actions to v4.38.2, and #19, which moves both artifact actions. The
+  Security workflow passes on #18.
 
   Implementation details:
   - `security.yml` gains a `govulncheck` job with job-level `contents: read`.
@@ -298,7 +330,8 @@ comment, and the current Code Scanning alert state on GitHub.
 
 ### SEC-006: Release artifacts are not signed and have no provenance
 
-- **Status:** Open
+- **Status:** In Progress (implemented in the working tree; awaiting merge, a
+  manual CD run, and the next release)
 - **Affected component:** `.github/workflows/cd.yml` (`release` job)
 - **Risk:** Low. `checksums.txt` is produced in the same job and published
   next to the artifacts. It detects corruption but not tampering, because an
@@ -324,6 +357,68 @@ comment, and the current Code Scanning alert state on GitHub.
     stands.
   - Whether the immutable-release attestation is an acceptable substitute is
     a maintainer decision; it is not assumed here.
+  - **Decision (2026-09-27, Q-010):** add build provenance. The release
+    attestation alone is not accepted as a substitute.
+  - **Implementation (uncommitted):** `cd.yml` splits the old `release` job
+    in two.
+    - `package` ("Package and attest") downloads the binaries, packages them,
+      writes `checksums.txt`, and runs `actions/attest` v4.2.2 (pinned at
+      `1e69f48a…`) with `subject-checksums: dist/checksums.txt`, so all six
+      archives are subjects. It then uploads the archives as the
+      `release-archives` artifact.
+    - Only `package` has `id-token: write` and `attestations: write` (plus
+      `contents: read`), and it runs only first-party actions (security
+      requirement 10). `artifact-metadata: write` is omitted: in the v4.2.2
+      source, storage records are created only with `push-to-registry` and only
+      for organization-owned repositories.
+    - `release` ("Publish release") downloads `release-archives` and runs
+      `softprops/action-gh-release` v3.0.3 with `contents: write` on tag runs.
+      A compromised release action could therefore change what is uploaded,
+      but it could not sign provenance for it, so verification would fail.
+      softprops v3.0.3 runs on Node 24 with no input changes, and v3.0.2 fixed
+      uploads of small assets such as `checksums.txt`.
+    - Both jobs also run on manual runs, where only the `Create GitHub Release`
+      step is skipped. Attestation therefore precedes publication, and a
+      failed attestation publishes nothing.
+    - The new artifact steps use `upload-artifact` v7.0.1 and
+      `download-artifact` v8.0.1, the versions Dependabot PR #19 moves the
+      existing steps to. download-artifact v8 fails on a digest mismatch by
+      default.
+    - The README documents the strict check:
+      `gh attestation verify <archive> --repo jabbott-iii/Salus --signer-workflow jabbott-iii/Salus/.github/workflows/cd.yml --source-ref refs/tags/<tag>`.
+      It requires GitHub CLI 2.97 or newer: `--source-ref` needs 2.68, and
+      2.97.0 fixed GHSA-mm27-mwq9-fr5g, a signer-matching bypass.
+  - **Independent review findings (2026-09-27), both fixed before commit:**
+    - With `--repo` alone, gh accepts an attestation signed by any workflow in
+      the repository, from any ref (`policy.go` in gh v2.101.0). Manual CD
+      runs from any branch also create public attestations for archives with
+      the same names. The `--signer-workflow` and `--source-ref` flags exclude
+      both.
+    - The first implementation gave the single release job both
+      `id-token: write` and `contents: write` next to a third-party action.
+      That would have let a compromised action upload a malicious archive and
+      sign matching provenance. Hence the job split.
+  - **Local validation:**
+    - actionlint 1.7.12 reports no findings, including after merging the open
+      Dependabot PRs into a scratch copy.
+    - The packaging and checksum commands were run on dummy binaries. The
+      resulting `checksums.txt` parses, with the logic of the v4.2.2
+      `src/subject.ts`, into exactly the six archives, without
+      `checksums.txt` itself.
+    - The multi-path upload and the by-name download place the files directly
+      in `dist/`, per the upload-artifact v7.0.1 README (least common ancestor
+      as the root) and the download-artifact v8.0.1 README.
+  - **Remaining validation:**
+    1. After merge, a manual CD run shows the attestation step succeeding for
+       six subjects and the `release` job downloading `release-archives`.
+    2. Optionally, verify an archive from that run's `release-archives`
+       artifact, using `--source-ref` with the branch ref (for example
+       `refs/heads/main`).
+    3. After the next tag, the documented command succeeds for a downloaded
+       archive and fails for a modified copy.
+    4. Then close.
+
+    The v1.0.0 and v1.0.1 archives stay without build provenance.
 
 ### SEC-007: README recommends mounting the Docker socket into the container
 
@@ -400,3 +495,7 @@ comment, and the current Code Scanning alert state on GitHub.
     `salus version v1.0.1`.
   - Users on v1.0.0 archives should upgrade to v1.0.1 or later. v1.0.1 also
     carries behavior changes (see `notes.md`, "Upgrade impact").
+  - No regression from Dependabot PR #13 (2026-09-27): it moves
+    `actions/setup-go` from 5.6.0 to 7.0.0, and v6 changed toolchain
+    selection. Its CI logs on all three operating systems still show
+    `Setup go version spec 1.26.8` and `go version go1.26.8`.

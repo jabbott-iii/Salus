@@ -19,6 +19,7 @@ package internal
 import (
 	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -106,10 +107,15 @@ func newCheckListCmd(openDB DatabaseOpener) *cobra.Command {
 }
 
 func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
+	return newCheckRunCmdWith(openDB, RunChecks)
+}
+
+// newCheckRunCmdWith builds check run around the function that runs the
+// checks, so tests can inspect the options produced by the flags.
+func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOptions) ([]CheckOutcome, error)) *cobra.Command {
 	var (
 		only       []string
-		service    string
-		diskPath   string
+		opts       CheckOptions
 		jsonOutput bool
 		failOnly   bool
 		quiet      bool
@@ -121,12 +127,10 @@ func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
 		Short: "Run health checks and report the results",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			opts := CheckOptions{
-				DiskPath:    diskPath,
-				ServiceName: service,
-			}
-
 			if err := ValidateCheckKeys(only); err != nil {
+				return err
+			}
+			if err := validateLimits(opts); err != nil {
 				return err
 			}
 
@@ -141,7 +145,7 @@ func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
 			}
 
 			startedAt := time.Now()
-			outcomes, err := RunChecks(only, opts)
+			outcomes, err := runChecks(only, opts)
 			if err != nil {
 				return err
 			}
@@ -178,14 +182,61 @@ func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
 	}
 
 	cmd.Flags().StringSliceVar(&only, "only", nil, "comma-separated list of checks to run (default: all)")
-	cmd.Flags().StringVar(&service, "service", "", "systemd service name to check uptime for (defaults to host uptime)")
-	cmd.Flags().StringVar(&diskPath, "disk-path", "/", "mount path to check for free disk space")
+	cmd.Flags().StringVar(&opts.ServiceName, "service", "", "systemd service name to check uptime for (defaults to host uptime)")
+	cmd.Flags().StringVar(&opts.DiskPath, "disk-path", "/", "mount path to check for free disk space")
+	cmd.Flags().Float64Var(&opts.DiskWarnPercent, "disk-warn", defaultDiskWarnPercent, "disk usage percent at which disk-space reports WARN")
+	cmd.Flags().Float64Var(&opts.DiskFailPercent, "disk-fail", defaultDiskFailPercent, "disk usage percent at which disk-space reports FAIL")
+	cmd.Flags().Float64Var(&opts.MemWarnPercent, "mem-warn", defaultMemWarnPercent, "memory usage percent at which memory reports WARN")
+	cmd.Flags().Float64Var(&opts.MemFailPercent, "mem-fail", defaultMemFailPercent, "memory usage percent at which memory reports FAIL")
+	cmd.Flags().Float64Var(&opts.LoadWarnPercent, "load-warn", defaultLoadWarnPercent, "1-minute load average per CPU, in percent, at which cpu-load reports WARN")
+	cmd.Flags().Float64Var(&opts.LoadFailPercent, "load-fail", defaultLoadFailPercent, "1-minute load average per CPU, in percent, at which cpu-load reports FAIL")
+	cmd.Flags().DurationVar(&opts.CommandTimeout, "timeout", defaultCommandTimeout, "time limit for each docker, kubectl, or systemctl command")
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output results as JSON")
 	cmd.Flags().BoolVar(&failOnly, "fail-only", false, "only show WARN and FAIL results in text output")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "suppress report output, including --json (still sets the exit code)")
 	cmd.Flags().BoolVar(&noSave, "no-save", false, "do not persist this run to the database")
 
 	return cmd
+}
+
+// validateLimits rejects threshold and timeout flag values that cannot work:
+// every threshold must be a finite number above 0, each warn threshold must be
+// below its fail threshold, disk and memory thresholds are percentages of
+// capacity (at most 100), and the timeout must be positive. Load can exceed
+// 100 percent.
+func validateLimits(opts CheckOptions) error {
+	pairs := []struct {
+		name       string
+		warn, fail float64
+		max        float64 // 0 means no upper bound
+	}{
+		{"disk", opts.DiskWarnPercent, opts.DiskFailPercent, 100},
+		{"mem", opts.MemWarnPercent, opts.MemFailPercent, 100},
+		{"load", opts.LoadWarnPercent, opts.LoadFailPercent, 0},
+	}
+
+	for _, p := range pairs {
+		for _, f := range []struct {
+			flag  string
+			value float64
+		}{{"--" + p.name + "-warn", p.warn}, {"--" + p.name + "-fail", p.fail}} {
+			// pflag parses "NaN" and "Inf", so they are rejected explicitly.
+			if math.IsNaN(f.value) || math.IsInf(f.value, 0) || f.value <= 0 {
+				return fmt.Errorf("invalid %s value %g: must be a finite number greater than 0", f.flag, f.value)
+			}
+			if p.max > 0 && f.value > p.max {
+				return fmt.Errorf("invalid %s value %g: must be at most %g", f.flag, f.value, p.max)
+			}
+		}
+		if p.warn >= p.fail {
+			return fmt.Errorf("--%s-warn (%g) must be less than --%s-fail (%g)", p.name, p.warn, p.name, p.fail)
+		}
+	}
+
+	if opts.CommandTimeout <= 0 {
+		return fmt.Errorf("invalid --timeout value %s: must be greater than 0", opts.CommandTimeout)
+	}
+	return nil
 }
 
 func newJobsCmd(openDB DatabaseOpener) *cobra.Command {

@@ -14,6 +14,9 @@ jobs:
   # a runner of the matching OS (darwin/amd64 is cross-compiled by clang on the
   # Apple Silicon runner; windows/arm64 uses a pinned llvm-mingw toolchain).
   # Third-party actions and downloads are pinned by commit SHA or SHA-256.
+  # The Linux builds and the release job name Ubuntu 24.04 instead of using
+  # ubuntu-latest, so release builds change OS only when these labels are
+  # bumped (intel/notes.md Q-011).
   build:
     name: Build ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
@@ -21,7 +24,7 @@ jobs:
       fail-fast: true
       matrix:
         include:
-          - { goos: linux, goarch: amd64, runner: ubuntu-latest, smoke: true }
+          - { goos: linux, goarch: amd64, runner: ubuntu-24.04, smoke: true }
           - { goos: linux, goarch: arm64, runner: ubuntu-24.04-arm, smoke: true }
           - { goos: darwin, goarch: arm64, runner: macos-latest, smoke: true }
           - { goos: darwin, goarch: amd64, runner: macos-latest, smoke: false }
@@ -123,12 +126,19 @@ jobs:
           path: ${{ steps.build.outputs.binary }}
           if-no-files-found: error
 
-  release:
-    name: Package and Release
+  # Packages the archives and signs their build provenance (SEC-006). Only
+  # first-party actions may run in this job: id-token: write lets any step in
+  # it mint signing credentials for this workflow, which a third-party action
+  # could use to forge provenance. Manual runs attest too, so this job can be
+  # tested before a tag.
+  package:
+    name: Package and attest
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write
+      contents: read
+      id-token: write
+      attestations: write
 
     steps:
       - name: Download binaries
@@ -160,9 +170,42 @@ jobs:
           cd dist
           sha256sum -- * > checksums.txt
 
+      # Signs SLSA build provenance for every archive in checksums.txt. The
+      # verify command is in README.md ("Verifying build provenance").
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-checksums: dist/checksums.txt
+
+      - name: Upload release archives
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-archives
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/checksums.txt
+          if-no-files-found: error
+
+  # Publishes the attested archives with contents: write, but without the
+  # signing permissions of the package job. Manual runs stop after the download.
+  release:
+    name: Publish release
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-archives
+          path: dist
+
       - name: Create GitHub Release
         if: github.ref_type == 'tag'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: ${{ github.ref_name }}
           name: Release ${{ github.ref_name }}

@@ -18,20 +18,12 @@ limitations under the License.
 
 package internal
 
-// Threshold defaults and accessors for the disk, memory, and CPU load checks.
-// Only the Linux resource checks use them today, so this file is built only on
-// Linux; otherwise the unused linter fails on the non-Linux stubs. Widen the
-// build constraint when the macOS and Windows checks land (intel/plan.md P3-7).
-
-// Default thresholds applied when the corresponding CheckOptions field is unset (<= 0).
-const (
-	defaultDiskWarnPercent = 80.0
-	defaultDiskFailPercent = 90.0
-	defaultMemWarnPercent  = 80.0
-	defaultMemFailPercent  = 90.0
-	defaultLoadWarnPercent = 80.0
-	defaultLoadFailPercent = 100.0
-)
+// Threshold accessors for the disk, memory, and CPU load checks. The defaults
+// are in health.go, because check run uses them as flag defaults everywhere.
+// Only the Linux resource checks use the accessors today, so this file is
+// built only on Linux; otherwise the unused linter fails on the non-Linux
+// stubs. Widen the build constraint when the macOS and Windows checks land
+// (intel/plan.md P3-7).
 
 func orDefault(v, def float64) float64 {
 	if v <= 0 {

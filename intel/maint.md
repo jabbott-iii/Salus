@@ -7,8 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
-changes).
+Last reviewed: 2026-09-27 (against `78db94e` plus the uncommitted P2-6, P2-8,
+P3-1, P4-1, and P4-2 changes).
 
 ## 1. Purpose and scope
 
@@ -27,7 +27,7 @@ HTTP interface is ever added.
 | Layer | Files | Responsibility |
 |---|---|---|
 | Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`) and flag parsing. `check run` returns `*ExitStatusError` for WARN/FAIL. |
+| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`) and flag parsing. `check run` validates its threshold and timeout flags (`validateLimits`) and returns `*ExitStatusError` for WARN/FAIL. |
 | Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
 | Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
 | Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
@@ -62,12 +62,20 @@ authorization plus README and `history.md` updates:
 - **Command names and flags** documented in `README.md`, including the root
   `--version` flag (output `salus version <version>`, where `<version>` is
   `dev` unless set with `-ldflags "-X main.version=..."`).
+- **`check run` thresholds and timeout:** `--disk-warn`/`--disk-fail`
+  (defaults 80/90), `--mem-warn`/`--mem-fail` (80/90), and
+  `--load-warn`/`--load-fail` (80/100, per-CPU load in percent) are
+  percentages. `--timeout` (default 3s) bounds each external command. The
+  defaults are the `default*` constants in `health.go`. `validateLimits`
+  rejects NaN, infinite, zero, or negative thresholds, disk and memory values
+  above 100, a WARN value that is not below its FAIL value, and a timeout that
+  is not positive. It runs before the database opens or any check runs.
 - **Exit codes:** `check run` exits `0` all PASS, `1` any WARN, `2` any FAIL
   (`ExitCodeFor`). Every command exits `3` (`ExitCodeError`) for operational
-  errors: Cobra flag/argument errors, unknown `--only` keys, missing jobs, and
-  database failures (Q-004). `check run` returns `*ExitStatusError` for WARN
-  and FAIL, and `main.run` maps any returned error with `ExitCode`. Only
-  `main` calls `os.Exit`.
+  errors: Cobra flag/argument errors, invalid threshold or timeout values,
+  unknown `--only` keys, missing jobs, and database failures (Q-004).
+  `check run` returns `*ExitStatusError` for WARN and FAIL, and `main.run`
+  maps any returned error with `ExitCode`. Only `main` calls `os.Exit`.
 - **Check keys:** `disk-space`, `memory`, `cpu-load`, `docker-status`,
   `kubernetes-status`, `service-uptime`, `misconfig`. Keys are stored in the
   database and accepted by `--only`; never rename a key without a migration.
@@ -132,18 +140,21 @@ authorization plus README and `history.md` updates:
   passing it, and end option parsing with `--` before it where the tool
   supports it (see `SEC-001` in `cybersec.md`; `--service` is validated by
   `validUnitName` and passed as `systemctl is-active -- <name>`).
-- `check run` validates `--only` keys (`ValidateCheckKeys`) and opens the
-  database before running any check, so input and storage errors are
-  reported before slow checks run.
+- `check run` validates `--only` keys (`ValidateCheckKeys`) and its threshold
+  and timeout flags (`validateLimits`), then opens the database, all before
+  running any check, so input and storage errors are reported before slow
+  checks run.
 - Outcome messages are a single line. Use `firstLine` on tool output.
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
   registry references.
-- Threshold defaults and their accessors live in `health-thresholds.go`.
-  Zero or negative option values fall back to the defaults via `orDefault`.
-  The file is constrained to `//go:build linux` because only the Linux
-  resource checks use it. Widen the constraint when macOS and Windows checks
-  are added (P3-7).
+- Threshold and timeout defaults are constants in `health.go`, because
+  `check run` uses them as flag defaults on every platform. The threshold
+  accessors and `orDefault` live in `health-thresholds.go`. Zero or negative
+  option values, as tests and other Go callers may pass, fall back to the
+  defaults. That file is constrained to `//go:build linux` because only the
+  Linux resource checks use the accessors. Widen the constraint when macOS
+  and Windows checks are added (P3-7).
 - Unexported code referenced only from platform-specific files must carry
   the same build constraint. Otherwise golangci-lint's `unused` check fails
   on the other operating systems (this broke the macOS CI job on
@@ -227,7 +238,9 @@ authorization plus README and `history.md` updates:
   `isolateMisconfigEnv`. OS-specific expectations use `runtime.GOOS` with
   `t.Skip`, never silent passes.
 - Commands are tested through `Execute()` with injected writers and
-  arguments. The whole CLI, including exit codes, is tested through
+  arguments. `newCheckRunCmdWith` also takes the function that runs the
+  checks, so tests can assert the `CheckOptions` built from flags without
+  reading host state. The whole CLI, including exit codes, is tested through
   `main.run`.
 
 ## 7. CI/CD expectations
@@ -238,12 +251,36 @@ authorization plus README and `history.md` updates:
   gosec is intentionally non-blocking (Q-009). Its findings must be triaged
   in GitHub Code Scanning rather than ignored.
 - `docker.yml`: image build plus smoke tests on `main` and PRs to `main`.
-- `cd.yml`: on `v*` tags, builds six OS/arch targets with CGO, injects the
-  tag with `-X main.version`, smoke tests, packages, generates checksums, and
-  publishes a GitHub Release. The canonical release format is
+- `cd.yml`: on `v*` tags and manual `workflow_dispatch` runs, builds six
+  OS/arch targets with CGO, injects the tag with `-X main.version`, smoke
+  tests, packages, generates checksums, and attests SLSA build provenance for
+  every archive in `checksums.txt` (`actions/attest`, SEC-006). The `release`
+  job downloads the attested archives, and only tag runs publish them as a
+  GitHub Release. The canonical release format is
   `salus_<os>_<arch>.tar.gz` (Linux, macOS) and `salus_<os>_<arch>.zip`
   (Windows), plus `checksums.txt` (Q-003). The README install section must
-  match it.
+  match it, including the `gh attestation verify` command.
+- CD job permissions (SEC-006):
+  - The `package` job packages, checksums, and attests the archives with
+    `id-token: write` and `attestations: write`. Only first-party actions
+    (`actions/*`) may run in it: `id-token: write` lets any step in the job
+    mint signing credentials for the workflow, so a third-party action there
+    could forge provenance.
+  - The `release` job has `contents: write` and runs the third-party
+    `softprops/action-gh-release`, so that action cannot sign provenance.
+  - No other CD job has write permissions. Outside CD, only the `codeql` job in
+    `security.yml` can write (`security-events: write`, for SARIF upload).
+  - `artifact-metadata: write` is deliberately absent. `actions/attest`
+    creates storage records only with `push-to-registry`, and only for
+    organization-owned repositories (checked in the v4.2.2 source).
+- **Runner labels (Q-011):**
+  - CD builds Linux on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64),
+    and runs the release job on `ubuntu-24.04`, so release builds do not move
+    with `ubuntu-latest`.
+  - CI, Security, and Docker stay on `ubuntu-latest`, so runner image changes
+    surface there first.
+  - Move the CD labels deliberately and together, and validate the move with a
+    manual CD run.
 - Third-party actions are pinned by commit SHA with a version comment. Keep
   that practice for every new action. Dependabot (`.github/dependabot.yml`:
   `gomod`, `github-actions`, `docker`, weekly) updates the pins. Tools run with
@@ -255,10 +292,18 @@ authorization plus README and `history.md` updates:
     mismatch; this was seen on Dependabot PR #17.
   - `actions/upload-artifact` and `actions/download-artifact`.
 
-  Dependabot groups them once P2-8 (a) is applied. The artifact actions run
-  only in `cd.yml`, so PR checks do not cover them. Test them with a
-  `workflow_dispatch` CD run; its `Create GitHub Release` step runs only for
-  tags.
+  Dependabot groups them (`codeql-action` and `artifact-actions` in
+  `.github/dependabot.yml`, since `78db94e`; the first grouped PRs were #18
+  and #19). The artifact actions and `actions/attest` run only in `cd.yml`,
+  so PR checks do not cover them. Test them with a `workflow_dispatch` CD run.
+  Its `Create GitHub Release` step (`softprops/action-gh-release`) runs only
+  for tags, so no run before a release exercises it. Read that action's
+  release notes before bumping it.
+- Actions must run on Node 24. Runners annotate Node 20 actions as
+  deprecated, so check the run annotations after every action update.
+- Dependabot opens at most five PRs per ecosystem. When five are open, further
+  updates wait until some are merged, so check the annotations for actions it
+  has not proposed yet.
 - `security.yml` also runs `govulncheck`, which fails on vulnerabilities
   reachable from Salus code (SEC-005). Unlike gosec, it is blocking.
 - Container image (`Dockerfile`):
@@ -285,7 +330,9 @@ authorization plus README and `history.md` updates:
 - CI triggers on `push` to every branch and `pull_request` to every branch.
   Keep both (Q-008).
 - Releases are cut with `make release VERSION=vX.Y.Z`, which creates and
-  pushes an annotated tag.
+  pushes an annotated tag. The `Makefile` also has development targets:
+  `build` (`CGO_ENABLED=1`), `test`, `vet`, `lint` (golangci-lint for the
+  linux, darwin, and windows targets), `fmt`, and `cover`.
 
 ## 8. Documentation duties
 

@@ -3,8 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-27 (against commit `753252e` plus uncommitted P2-3/P2-4
-changes).
+Last reviewed: 2026-09-27 (against `78db94e` plus the uncommitted P2-6, P2-8,
+P3-1, P4-1, and P4-2 changes).
 
 ## Directory structure
 
@@ -15,11 +15,13 @@ Salus/
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
-│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show
-│   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence
-│   ├── health.go               Check keys, options, thresholdStatus, registry, RunChecks,
-│   │                           docker / kubernetes / service-uptime / misconfig checks
-│   ├── health-thresholds.go    Threshold defaults + accessors (//go:build linux until P3-7)
+│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show;
+│   │                           check run threshold/timeout flags + validateLimits
+│   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence,
+│   │                           flag → CheckOptions mapping, threshold/timeout validation
+│   ├── health.go               Check keys, options, threshold/timeout defaults, thresholdStatus,
+│   │                           registry, RunChecks, docker / kubernetes / service-uptime / misconfig checks
+│   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux until P3-7)
 │   ├── health-resources_linux.go   disk (statfs), memory (/proc/meminfo),
 │   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
 │   ├── health-resources_other.go   Non-Linux stubs returning WARN
@@ -37,16 +39,18 @@ Salus/
 │   ├── logic-tui.go            Empty placeholder, to be removed (CLI-only, Q-001)
 │   └── ui-form.go              Empty placeholder, to be removed (CLI-only, Q-001)
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
-├── .github/dependabot.yml      Weekly updates: gomod, github-actions, docker (via workflow patch)
+├── .github/dependabot.yml      Weekly updates: gomod, github-actions (codeql-action + artifact-actions groups), docker
 ├── .github/workflows/
 │   ├── ci.yml                  vet, lint, test+coverage, native build smoke (3 OSes)
 │   ├── security.yml            CodeQL + gosec (SARIF, non-blocking) + govulncheck (blocking)
 │   ├── docker.yml              Image build + smoke tests (non-root, volume, in-container WARNs)
-│   └── cd.yml                  Tag-triggered 6-target CGO build → .tar.gz/.zip + checksums
+│   └── cd.yml                  Tag/manual 6-target CGO build → package job: .tar.gz/.zip + checksums
+│                               + provenance attestation → release job: GitHub Release (tags only);
+│                               Linux builds and both release jobs pinned to Ubuntu 24.04
 ├── .devcontainer/devcontainer.json   Ubuntu base + Go, Docker-outside-of-Docker, Neovim
 ├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001
 ├── .dockerignore               Keeps .git, .env, *.db, IDE/CI files out of the build context
-├── Makefile                    Release tagging only (tag, push-tag, release)
+├── Makefile                    Dev targets (build, test, vet, lint, fmt, cover) + release tagging
 ├── AGENTS.md                   Agent/contributor operating rules
 ├── README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 ├── LICENSE (Apache-2.0), NOTICE, CODEOWNERS
@@ -102,10 +106,14 @@ sequenceDiagram
     participant S as RecordScan
     participant DB as SQLite
 
-    U->>CLI: salus check run [--only ...] [--json]
+    U->>CLI: salus check run [--only ...] [--json] [thresholds, --timeout]
+    CLI->>CLI: validate --only keys and threshold/timeout flags (exit 3 on error)
+    opt without --no-save
+        CLI->>DB: open database (created 0600 if missing)
+    end
     CLI->>C: keys, CheckOptions
     loop each check key (sequential)
-        C->>H: read /proc or run CLI (3s timeout)
+        C->>H: read /proc or run CLI (--timeout, default 3s)
         H-->>C: data or error
     end
     C-->>CLI: []CheckOutcome

@@ -23,6 +23,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -373,5 +374,125 @@ func TestCheckRunValidatesChecksBeforeOpeningDatabase(t *testing.T) {
 	cmd.SetArgs([]string{"--only", "does-not-exist"})
 	if err := cmd.Execute(); err == nil || !strings.Contains(err.Error(), `unknown check "does-not-exist"`) {
 		t.Fatalf("Execute() error = %v, want unknown check", err)
+	}
+}
+
+// neverOpen returns a DatabaseOpener that fails the test if it is called.
+func neverOpen(t *testing.T) DatabaseOpener {
+	t.Helper()
+	return func() (*Database, error) {
+		t.Error("check run opened the database")
+		return nil, errors.New("unexpected open")
+	}
+}
+
+func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want CheckOptions
+	}{
+		{
+			name: "defaults",
+			want: CheckOptions{
+				DiskPath:        "/",
+				DiskWarnPercent: 80, DiskFailPercent: 90,
+				MemWarnPercent: 80, MemFailPercent: 90,
+				LoadWarnPercent: 80, LoadFailPercent: 100,
+				CommandTimeout: 3 * time.Second,
+			},
+		},
+		{
+			name: "overrides",
+			args: []string{
+				"--disk-path", "/data", "--service", "nginx",
+				"--disk-warn", "70", "--disk-fail", "85.5",
+				"--mem-warn", "60", "--mem-fail", "95",
+				"--load-warn", "150", "--load-fail", "300",
+				"--timeout", "10s",
+			},
+			want: CheckOptions{
+				DiskPath: "/data", ServiceName: "nginx",
+				DiskWarnPercent: 70, DiskFailPercent: 85.5,
+				MemWarnPercent: 60, MemFailPercent: 95,
+				LoadWarnPercent: 150, LoadFailPercent: 300,
+				CommandTimeout: 10 * time.Second,
+			},
+		},
+		{
+			name: "percentages at the 100 limit",
+			args: []string{"--disk-fail", "100", "--mem-fail", "100"},
+			want: CheckOptions{
+				DiskPath:        "/",
+				DiskWarnPercent: 80, DiskFailPercent: 100,
+				MemWarnPercent: 80, MemFailPercent: 100,
+				LoadWarnPercent: 80, LoadFailPercent: 100,
+				CommandTimeout: 3 * time.Second,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got CheckOptions
+			runChecks := func(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
+				got = opts
+				return []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}}, nil
+			}
+
+			cmd := newCheckRunCmdWith(neverOpen(t), runChecks)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(append([]string{"--no-save"}, tt.args...))
+			if err := cmd.Execute(); err != nil {
+				t.Fatalf("Execute() error = %v", err)
+			}
+			// The test seams are nil in both, and DeepEqual treats nil funcs as equal.
+			if !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("options passed to the checks = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCheckRunRejectsInvalidLimits(t *testing.T) {
+	tests := []struct {
+		name    string
+		args    []string
+		wantErr string
+	}{
+		{"warn above default fail", []string{"--disk-warn", "95"}, "--disk-warn (95) must be less than --disk-fail (90)"},
+		{"warn equals fail", []string{"--mem-warn", "90", "--mem-fail", "90"}, "--mem-warn (90) must be less than --mem-fail (90)"},
+		{"load warn above fail", []string{"--load-warn", "200", "--load-fail", "150"}, "--load-warn (200) must be less than --load-fail (150)"},
+		{"disk above 100", []string{"--disk-fail", "101"}, "invalid --disk-fail value 101: must be at most 100"},
+		{"memory above 100", []string{"--mem-fail", "100.5"}, "invalid --mem-fail value 100.5: must be at most 100"},
+		{"zero", []string{"--mem-warn", "0"}, "invalid --mem-warn value 0: must be a finite number greater than 0"},
+		{"negative", []string{"--load-warn=-1"}, "invalid --load-warn value -1: must be a finite number greater than 0"},
+		{"not a number", []string{"--load-fail", "NaN"}, "invalid --load-fail value NaN: must be a finite number greater than 0"},
+		{"infinite", []string{"--load-fail", "+Inf"}, "invalid --load-fail value +Inf: must be a finite number greater than 0"},
+		{"zero timeout", []string{"--timeout", "0s"}, "invalid --timeout value 0s: must be greater than 0"},
+		{"negative timeout", []string{"--timeout=-1s"}, "invalid --timeout value -1s: must be greater than 0"},
+		{"malformed value", []string{"--disk-warn", "high"}, `invalid argument "high" for "--disk-warn" flag`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) {
+				t.Error("checks ran despite an invalid flag value")
+				return nil, nil
+			}
+
+			cmd := newCheckRunCmdWith(neverOpen(t), runChecks)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(tt.args)
+			err := cmd.Execute()
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Execute(%q) error = %v, want it to contain %q", tt.args, err, tt.wantErr)
+			}
+			if got := ExitCode(err); got != ExitCodeError {
+				t.Errorf("ExitCode(%v) = %d, want %d", err, got, ExitCodeError)
+			}
+		})
 	}
 }

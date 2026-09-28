@@ -310,3 +310,92 @@ reconstructed from commit messages and diffs, not first-hand records.
     CodeQL Action v3 (December 2026), and the `ubuntu-latest` move to
     Ubuntu 26 (2026-10-19).
   - Uncommitted at the time of writing.
+
+## 2026-09-27: Threshold flags, Makefile targets, README restructure, CD provenance and runner pin
+
+- Change:
+  - `check run` gained `--disk-warn`, `--disk-fail`, `--mem-warn`,
+    `--mem-fail`, `--load-warn`, `--load-fail` (percentages), and `--timeout`
+    (P3-1). Invalid values (NaN, infinite, zero, or negative; disk or memory
+    above 100; warn not below fail; a timeout that is not positive) exit `3`
+    before the database opens or any check runs. This is additive: the
+    defaults are unchanged (80/90, 80/90, 80/100, 3s). They moved from
+    `internal/health-thresholds.go` (Linux-only) to `internal/health.go`.
+  - `Makefile`: new `build`, `test`, `vet`, `lint` (three GOOS targets),
+    `fmt`, and `cover` targets, with the release targets unchanged (P4-2).
+    `.gitignore` now ignores the `/salus` build output.
+  - `README.md` follows the `AGENTS.md` section order: use cases,
+    prerequisites, build from source, provenance verification, exit codes,
+    testing, and project structure were added (P4-1). `CONTRIBUTING.md` was
+    aligned with it.
+  - `.github/workflows/cd.yml`:
+    - An `actions/attest` v4.2.2 step signs build provenance for every archive
+      in `checksums.txt` (P2-6, Q-010). The `release` job gains `id-token:
+      write` and `attestations: write`.
+    - The linux/amd64 build and the release job are pinned to `ubuntu-24.04`
+      (Q-011).
+    - `softprops/action-gh-release` moved from v2.6.2 to v3.0.3 (Node 24).
+  - Recorded the Q-010 and Q-011 decisions and the P2-8 status. The Dependabot
+    grouping from `78db94e` produced #18 and #19; #13, #20, and #21 were
+    reviewed. Every action pin was verified against its upstream tag.
+    SEC-006 is In Progress. SEC-005 gained supporting evidence from a local
+    run of the vulnerable fixture.
+- Files: `internal/health.go`, `internal/health-thresholds.go`,
+  `internal/logic-cli.go`, `internal/logic-cli_test.go`, `main_test.go`,
+  `Makefile`, `.gitignore`, `.github/workflows/cd.yml`, `README.md`,
+  `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
+  `intel/notes.md`, `intel/plan.md`, `intel/history.md`
+- Reason / reference: the plan M4 sequence (P2-8, P4-1, P4-2, P2-6, P3-1).
+  - Validation run locally on Linux, all passing or clean:
+    - `gofmt -s -l`, `go vet`, and `go test` with and without `-race`.
+    - golangci-lint v2.13.2 for linux, darwin, and windows.
+    - actionlint 1.7.12, also on a three-way merge of the local changes with
+      Dependabot PRs #13 and #18 to #21.
+    - govulncheck v1.8.0.
+    - Every new `make` target.
+  - Mutation checks: all 11 targeted mutations of the new flag wiring and
+    validation were caught by the tests.
+  - Not run: GitHub Actions for these changes; the CD `workflow_dispatch`
+    check for #19 (the token lacks `actions: write`); macOS and Windows test
+    execution; Docker.
+  - Uncommitted at the time of writing.
+
+## 2026-09-27: Review fixes to the provenance, Makefile, and threshold changes
+
+- Change: An independent review of the previous entry's uncommitted changes
+  led to these corrections before commit:
+  - `cd.yml`: the release job is split in two. `package` runs only
+    first-party actions. It packages, checksums, attests, and uploads the
+    archives, and it alone has `id-token: write` and `attestations: write`.
+    `release` downloads the archives and publishes them with
+    `contents: write` and `softprops/action-gh-release`. A compromised
+    third-party action can no longer sign provenance. This is now security
+    requirement 10 in `intel/cybersec.md`.
+  - README: the provenance check pins `--signer-workflow` and
+    `--source-ref refs/tags/<tag>` and requires GitHub CLI 2.97 or newer,
+    because `--repo` alone accepts any workflow and ref in the repository.
+  - `Makefile`: `make lint` sets `GOOS=linux` explicitly, so a macOS host also
+    lints the Linux build.
+  - Tests: two more `check run` cases (the 100 limit, and
+    `--mem-fail 100.5`) catch the two mutations that had survived.
+  - Documentation wording:
+    - the exit code on macOS and Windows;
+    - `--no-save`;
+    - what 100% load means;
+    - the scope of write permissions in `maint.md`;
+    - the `check run` sequence diagram in `map.md`.
+- Files: `.github/workflows/cd.yml`, `Makefile`, `internal/logic-cli.go`
+  (comment only), `internal/logic-cli_test.go`, `README.md`,
+  `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
+  `intel/plan.md`, `intel/history.md`
+- Reason / reference: the independent review of 2026-09-27. The previous
+  entry's statements that the `release` job gains the signing permissions,
+  and that 11 mutations were checked, describe the state before these fixes.
+  - Validation rerun on the final state, all passing or clean:
+    - `gofmt`, `go vet`, and `go test` (also with `-race -shuffle=on`).
+    - `make lint` for linux, darwin, and windows.
+    - actionlint 1.7.12, also on a three-way merge with Dependabot PRs #13 and
+      #18 to #21.
+    - govulncheck v1.8.0.
+    - 13 of 13 targeted mutations caught.
+  - Uncommitted at the time of writing.

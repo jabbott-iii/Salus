@@ -33,6 +33,7 @@ Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
   `github.com/mattn/go-sqlite3`. A build with CGO disabled compiles but
   cannot open its database at runtime.
 - **Git.**
+- Optional: **GNU Make**, for the targets in the `Makefile`.
 - Optional: **golangci-lint v2.13.2**, the version CI uses.
 - Optional: **Docker**, to build the container image.
 
@@ -46,7 +47,7 @@ From the repository root:
 
 ```bash
 go mod download
-CGO_ENABLED=1 go build -o salus .
+CGO_ENABLED=1 go build -o salus .   # or: make build
 ./salus check list
 ./salus check run
 ```
@@ -69,14 +70,19 @@ gofmt -s -w .                      # required before every pull request
 go vet ./...
 go test ./...
 go test -race ./...                # required for concurrency-related changes
-golangci-lint run                  # CI uses golangci-lint v2.13.2
+GOOS=linux golangci-lint run ./...    # CI uses golangci-lint v2.13.2
 GOOS=darwin golangci-lint run ./...   # CI also lints on macOS
 GOOS=windows golangci-lint run ./...  # ...and on Windows
 go mod tidy && git diff --exit-code   # CI fails if go.mod/go.sum drift
 ```
 
-CI also runs tests on Linux, macOS, and Windows, and CodeQL and gosec on every
-push and pull request. Make sure CI passes on your pull request.
+`make fmt`, `make vet`, `make test`, and `make lint` (all three `GOOS`
+values) run the same commands. `make cover` writes `coverage.out` and prints
+coverage per function.
+
+CI also runs tests on Linux, macOS, and Windows, and CodeQL, gosec, and
+govulncheck on every push and pull request. Make sure CI passes on your pull
+request.
 
 ## Coding expectations
 
@@ -87,10 +93,10 @@ push and pull request. Make sure CI passes on your pull request.
   pull request.
 - **Scope.** Keep changes narrowly scoped. Avoid unrelated refactoring,
   formatting churn, renames, or dependency upgrades.
-- **Compatibility.** Command names, flags, exit codes (`0` PASS, `1` WARN,
-  `2` FAIL), check keys, JSON output fields, `SALUS_DB_PATH`, and the database
-  schema are public contracts. Do not change them without explicit approval
-  on the issue.
+- **Compatibility.** Command names, flags and their defaults, exit codes (`0`
+  PASS, `1` WARN, `2` FAIL, `3` operational error), check keys, JSON output
+  fields, `SALUS_DB_PATH`, and the database schema are public contracts. Do
+  not change them without explicit approval on the issue.
 - **Errors.** Wrap errors with context (`fmt.Errorf("...: %w", err)`), and
   check and return every write to a command's output writer.
 - **External commands.** Use `exec.CommandContext` with a timeout and separate
@@ -145,7 +151,10 @@ status are tracked in [`intel/cybersec.md`](intel/cybersec.md).
 ## Releases
 
 Releases are cut by maintainers. `make release VERSION=vX.Y.Z` creates and
-pushes an annotated tag, which triggers the CD workflow.
+pushes an annotated tag, which triggers the CD workflow. When a change touches
+`.github/workflows/cd.yml` or the actions it uses, run CD manually first
+(`workflow_dispatch`): it builds, smoke-tests, packages, and attests the
+archives, and it skips only the `Create GitHub Release` step.
 
 ## License
 

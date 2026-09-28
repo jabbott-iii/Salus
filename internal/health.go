@@ -89,9 +89,18 @@ type CheckOptions struct {
 	lookPath   func(file string) (string, error)
 }
 
-// defaultCommandTimeout applies when CheckOptions.CommandTimeout is unset (<= 0).
-// Resource threshold defaults live in health-thresholds.go.
-const defaultCommandTimeout = 3 * time.Second
+// Defaults applied when the corresponding CheckOptions field is unset (<= 0).
+// check run also uses them as its flag defaults, on every platform. The
+// resource checks read thresholds through the accessors in health-thresholds.go.
+const (
+	defaultDiskWarnPercent = 80.0
+	defaultDiskFailPercent = 90.0
+	defaultMemWarnPercent  = 80.0
+	defaultMemFailPercent  = 90.0
+	defaultLoadWarnPercent = 80.0
+	defaultLoadFailPercent = 100.0
+	defaultCommandTimeout  = 3 * time.Second
+)
 
 func (o CheckOptions) commandTimeout() time.Duration {
 	if o.CommandTimeout <= 0 {

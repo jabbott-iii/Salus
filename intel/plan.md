@@ -4,13 +4,14 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-27 (against `b66694a`, tagged v1.0.1, and its GitHub
-Actions runs: CI #49, Docker #15, Security #54, CD #2). Decisions on Q-001 to
-Q-009 are recorded in `notes.md`; Q-010 and Q-011 are open.
+Last reviewed: 2026-09-27 (against `78db94e`, its GitHub Actions runs, and
+open Dependabot PRs #13 and #18 to #21). Decisions on Q-001 to Q-011 are
+recorded in `notes.md`.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
-`In Progress`, `Blocked`, `Awaiting merge` (delivered as a patch for the
-maintainer to apply, for example for `.github/`), `Awaiting CI` (implemented
+`In Progress`, `Blocked`, `Awaiting merge` (delivered for the maintainer to
+apply: a patch, uncommitted working-tree changes, or an open PR that needs
+approval), `Awaiting CI` (implemented
 and validated locally, waiting for a GitHub Actions run), `Awaiting maintainer
 check` (merged and CI-validated; one validation step needs something only the
 maintainer has, such as a Docker daemon or a branch push), `Done`.
@@ -113,9 +114,9 @@ Order by risk and effort. Update `cybersec.md` status as each item moves.
 | P2-3 | SEC-002 and SEC-003: non-root container user, digest-pinned base images, `.dockerignore`. | P0-4 Implemented 2026-09-27: UID 10001 `salus` user owns `/app/data` (0700), both stages are digest-pinned on Alpine 3.24, and `.dockerignore` was added. Merged in `b66694a` (v1.0.1). Docker #15 is green, with UID 10001 asserted, so SEC-002 is Closed. The `.dockerignore` passed a BuildKit-matcher check with decoy files. SEC-003 stays In Progress until the maintainer runs the four-command local `.env` check in `cybersec.md`. | Awaiting maintainer check |
 | P2-4 | SEC-005: `govulncheck` in CI and `.github/dependabot.yml` (gomod, github-actions, docker). gosec stays non-blocking (Q-009), and that policy is recorded in `maint.md`. | none Delivered as `salus-p24-workflows.patch`, because the remote session cannot write `.github/`: a `govulncheck@v1.8.0` job in `security.yml`, `.github/dependabot.yml` (gomod, github-actions, docker), and new `docker.yml` assertions. Merged in `b66694a` (v1.0.1). Security #54 ran `govulncheck`, which found no vulnerabilities. Dependabot opened #13 to #17. Remaining for SEC-005: one failing `govulncheck` run on a throwaway branch (fixture in `cybersec.md`). | Awaiting maintainer check |
 | P2-5 | SEC-007: README container guidance. | P4-1 Done ahead of P4-1: the README Docker section rewritten (unsupported in-container checks, no socket mount, bind-mount ownership, 1.0.0 volume upgrade). The CI assertion passed in Docker #15. The socket case was checked with the released binary. SEC-007 Closed. | Done |
-| P2-6 | SEC-006: release provenance or signing. | P0-3 Note: v1.0.1 is an immutable GitHub release with a release attestation (`gh release verify-asset`). That covers tampering after publication, but not build provenance; see SEC-006. Decide whether to add build provenance (`actions/attest-build-provenance` in the `release` job) or accept the release attestation (Q-010). | Proposed |
+| P2-6 | SEC-006: release provenance or signing. | P0-3 Note: v1.0.1 is an immutable GitHub release with a release attestation (`gh release verify-asset`). That covers tampering after publication, but not build provenance; see SEC-006. Decide whether to add build provenance (`actions/attest-build-provenance` in the `release` job) or accept the release attestation (Q-010). Q-010 decided 2026-09-27: add build provenance. Implemented (uncommitted) with `actions/attest` v4.2.2, the maintained successor (`attest-build-provenance` v4 is a wrapper around it). After an independent review, the CD release job was split in two. `package` runs only first-party actions: it packages, writes checksums, attests with `subject-checksums: dist/checksums.txt`, and uploads the archives. It alone has `id-token: write` and `attestations: write`. `release` publishes them with `contents: write` and softprops v3.0.3 (tags only). A compromised third-party action therefore cannot sign provenance (security requirement 10). The README documents the strict check (`--signer-workflow` and `--source-ref refs/tags/<tag>`, GitHub CLI 2.97 or newer), because `--repo` alone accepts any workflow and ref in the repository. Validated locally with actionlint (including a three-way merge with the open Dependabot PRs), a packaging and checksum-parser simulation, and the artifact actions' documented path behavior. Next: a manual CD run after merge, then verify an archive from the next release (see SEC-006). | Awaiting CI |
 | P2-7 | SEC-008: build with the latest Go patch release. `go.mod` `go 1.26.0` → `go 1.26.8`, because CI and CD install exactly the `go.mod` version. Then cut a release so users get a patched binary. | P2-4 (`govulncheck`) Released as v1.0.1 (CD #2). CI and CD logs show go1.26.8, and `go version -m` on the released linux/amd64 binary reports go1.26.8. SEC-008 Closed. | Done |
-| P2-8 | GitHub Actions maintenance, surfaced by the first Dependabot run and v1.0.1 annotations. (a) Group coupled actions in `.github/dependabot.yml`: every `github/codeql-action` sub-action, and `actions/upload-artifact` with `actions/download-artifact`. Delivered as `salus-p28-dependabot.patch`. Today #15 and #17 bump single CodeQL sub-actions, and #17 fails CodeQL. (b) Move `github/codeql-action` to v4 as one group before its v3 deprecation in December 2026, per the CodeQL annotation. (c) Take the Node 24 majors of `actions/checkout` and `actions/setup-go`: v4.4.0 and v5.6.0 target Node 20, and runners already force them onto Node 24 (warning). (d) `upload-artifact` and `download-artifact` run only in `cd.yml`, so PR checks do not exercise #14 or #16. Run CD with `workflow_dispatch` on their branch first; the release step runs only for tags. (e) `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19, per the runner annotation. Run CD with `workflow_dispatch` after that date and before the next tag, or pin `ubuntu-24.04` (Q-011). | P2-4 Acceptance: one grouped CodeQL v4 PR passes Security, and a `workflow_dispatch` CD run on the artifact-action branch packages six archives. The Security, CI, CD, and Docker annotations no longer show the Node 20 warning. | Awaiting merge |
+| P2-8 | GitHub Actions maintenance, surfaced by the first Dependabot run and v1.0.1 annotations. (a) Group coupled actions in `.github/dependabot.yml`: every `github/codeql-action` sub-action, and `actions/upload-artifact` with `actions/download-artifact`. Delivered as `salus-p28-dependabot.patch`. Today #15 and #17 bump single CodeQL sub-actions, and #17 fails CodeQL. (b) Move `github/codeql-action` to v4 as one group before its v3 deprecation in December 2026, per the CodeQL annotation. (c) Take the Node 24 majors of `actions/checkout` and `actions/setup-go`: v4.4.0 and v5.6.0 target Node 20, and runners already force them onto Node 24 (warning). (d) `upload-artifact` and `download-artifact` run only in `cd.yml`, so PR checks do not exercise #14 or #16. Run CD with `workflow_dispatch` on their branch first; the release step runs only for tags. (e) `ubuntu-latest` moves to Ubuntu 26 from 2026-10-19, per the runner annotation. Run CD with `workflow_dispatch` after that date and before the next tag, or pin `ubuntu-24.04` (Q-011). **Status 2026-09-27 (later):** (a) Done in `78db94e`: Dependabot closed #14 to #17 and opened the grouped #18 and #19. (b) #18 moves all four CodeQL sub-actions to v4.38.2 and passes Security, so it only needs approval and merge. (c) #21 (`checkout` v7.0.1) and #13 (`setup-go` v7.0.0) pass every check. #20 (`codecov-action` v7.1.1) is also needed, because Codecov v5 runs `actions/github-script` v7 (Node 20) internally. Release notes were reviewed, and setup-go v7 still installs Go 1.26.8. (d) Not run: this session's token cannot dispatch workflows (HTTP 403). The command is `gh workflow run cd.yml --ref dependabot/github_actions/artifact-actions-055219aa09`, or use the Actions tab. (e) Q-011 decided (pin CD only): CD's linux/amd64 build and its release job now use `ubuntu-24.04` (uncommitted). (f) New: `softprops/action-gh-release` v2.6.2 is Node 20 too, per the CD annotations. It was moved to v3.0.3 in the working tree, because Dependabot was at its five-PR limit. Every new pin was verified against its upstream tag. The five PRs and the local changes merge cleanly in a three-way simulation, and the result passes actionlint 1.7.12. | P2-4 Acceptance: one grouped CodeQL v4 PR passes Security (met by #18), and a `workflow_dispatch` CD run on the artifact-action branch packages six archives. A manual CD run on `main` after merging, before the next tag, is an equivalent check, because CD runs only for tags and manual dispatches. The Security, CI, CD, and Docker annotations no longer show the Node 20 warning. | Awaiting merge |
 
 ## Phase 3: Feature completeness
 
@@ -125,7 +126,7 @@ needs tests without host dependence (P1-8) and README updates.
 
 | ID | Work | Notes | Status |
 |---|---|---|---|
-| P3-1 | Expose thresholds and the command timeout as flags on `check run` (for example `--disk-warn`, `--disk-fail`, `--mem-warn`, `--mem-fail`, `--load-warn`, `--load-fail`, `--timeout`). Validate warn < fail and sane ranges. | `CheckOptions` already supports these fields. This is additive and non-breaking. | Proposed |
+| P3-1 | Expose thresholds and the command timeout as flags on `check run` (for example `--disk-warn`, `--disk-fail`, `--mem-warn`, `--mem-fail`, `--load-warn`, `--load-fail`, `--timeout`). Validate warn < fail and sane ranges. | `CheckOptions` already supports these fields. This is additive and non-breaking. Implemented 2026-09-27 (uncommitted). The flags are bound to `CheckOptions`, and the defaults moved to `health.go`. `validateLimits` requires finite values above 0, disk and memory values of at most 100, warn below fail, and a positive timeout. It returns exit 3 before the database opens. `newCheckRunCmdWith` injects the check runner for tests. Tests: `TestCheckRunPassesFlagValuesToChecks` (defaults, overrides, and the 100 limit), `TestCheckRunRejectsInvalidLimits` (12 cases), and a `TestRunExitCodes` case. All 13 targeted mutations were caught. That count includes the two the independent review found surviving (no memory cap, `>=` at the cap), which led to the 100-limit and `--mem-fail 100.5` cases. Tests (with and without `-race`) pass on Linux, and golangci-lint passes for linux, darwin, and windows. README updated. | Awaiting CI |
 | P3-2 | Docker container health: report unhealthy or restarting containers, not only daemon reachability. | Matches the "Container Runtime" category description in `seed.go`. | Proposed |
 | P3-3 | Kubernetes depth: node readiness, plus an optional `--kube-context`. | Keep `kubectl` as the integration. No client-go dependency without a decision. | Proposed |
 | P3-4 | Broader misconfiguration detection: kubeconfig permissions, Docker socket permissions, world-writable `PATH` entries, and DB file mode (with P2-2). | Every rule gets a stable identifier in the message and a test. | Proposed |
@@ -138,12 +139,13 @@ needs tests without host dependence (P1-8) and README updates.
 
 | ID | Work | Status |
 |---|---|---|
-| P4-1 | Align the README with the `AGENTS.md` section order: prerequisites (Go 1.26, C toolchain for CGO), build from source, configuration (`SALUS_DB_PATH`), exit codes, testing and quality checks, project structure, and container caveats (SEC-007). The install section was already updated for archives in Phase 0 (Q-003). Add macOS Gatekeeper guidance for the unsigned binaries after confirming the behavior on a Mac (see SEC-006). | Proposed |
-| P4-2 | Add Makefile targets `build`, `test`, `vet`, `lint`, `fmt`, and `cover`, keeping the existing release targets unchanged. | Proposed |
+| P4-1 | Align the README with the `AGENTS.md` section order: prerequisites (Go 1.26, C toolchain for CGO), build from source, configuration (`SALUS_DB_PATH`), exit codes, testing and quality checks, project structure, and container caveats (SEC-007). The install section was already updated for archives in Phase 0 (Q-003). Add macOS Gatekeeper guidance for the unsigned binaries after confirming the behavior on a Mac (see SEC-006). Done 2026-09-27 (uncommitted). The README follows the `AGENTS.md` order and adds use cases, prerequisites, build from source, `gh attestation verify`, an exit-code table, the new threshold flags, testing and quality checks, and the project structure. `CONTRIBUTING.md` was aligned (Make targets, exit code 3 as a contract, manual CD runs before tags). The Gatekeeper guidance moved to P4-7. | Awaiting merge |
+| P4-2 | Add Makefile targets `build`, `test`, `vet`, `lint`, `fmt`, and `cover`, keeping the existing release targets unchanged. Done 2026-09-27 (uncommitted). Every target was run: `make lint` (golangci-lint with an explicit `GOOS=linux`, `darwin`, and `windows`, so a macOS host also lints Linux; this was a review fix, checked with a decoy unused Linux-only function; override the binary with `GOLANGCI_LINT=`) reports 0 issues. The release targets are unchanged, checked with the `check-version` guard and `make -n release`. `/salus` was added to `.gitignore`, so `make build` output stays untracked. | Awaiting merge |
 | P4-3 | Add an explicit `.golangci.yml` so the linter set does not drift with golangci-lint defaults. | Proposed |
 | P4-4 | Add `SECURITY.md` with a vulnerability reporting channel. Needs maintainer input on the channel. | Proposed |
 | P4-5 | Resolve `.idea/` handling (Q-007). Add issue and PR templates that match `CONTRIBUTING.md`'s issue-first rule. | Proposed |
 | P4-6 | Dockerfile cleanup: fix the stale "rete.db" and "TUI" comments, and use `TARGETARCH` instead of a hard-coded `GOARCH=amd64`. Check whether `sqlite-libs` is needed at runtime (go-sqlite3 bundles SQLite unless built with the `libsqlite3` tag) using `ldd` before removing it. Stale comments and `TARGETARCH` done 2026-09-27 with P2-3. Update 2026-09-27: `sqlite-libs` and `ca-certificates` removed; unneeded per the go-sqlite3 source. Docker #15 on `b66694a` is green, and the binary runs and persists to the volume without them. | Done |
+| P4-7 | macOS Gatekeeper guidance for the unsigned release binaries (split from P4-1). On a Mac, confirm what happens when a binary extracted from a downloaded archive is run: whether the quarantine attribute blocks it, and whether `xattr -d com.apple.quarantine` is needed. Then document it in the README install section. SEC-006 covers provenance, not Apple code signing. | Blocked (needs a Mac) |
 
 ## Phase 5: Structure (optional, needs explicit approval)
 
@@ -172,4 +174,26 @@ needs tests without host dependence (P1-8) and README updates.
    because it has dates (the Ubuntu 26 runner switch on 2026-10-19 and the
    CodeQL Action v3 deprecation in December 2026). Then P4-1, P4-2, P2-6, and
    P3-1.
+   **Update 2026-09-27 (later):** P4-1, P4-2, P2-6, P3-1, and the local part of
+   P2-8 are implemented in the working tree (uncommitted). Maintainer steps, in
+   order:
+   1. Review, commit, and push the working tree. Pushing it first lets
+      Dependabot rebase its PRs; CI then runs the P3-1 tests on all three
+      operating systems.
+   2. Approve and merge Dependabot #18, #20, #21, and #13. All checks are
+      green.
+   3. Validate #19 (artifact actions): run CD manually on its branch, confirm
+      it packages six archives, and merge. Alternatively, merge it and run the
+      check in step 4.
+   4. Run CD manually on `main`. This exercises the `package` job
+      (attestation), the `release` job's download, the artifact actions, and
+      the pinned runners together. Confirm that no annotation mentions
+      Node 20.
+   5. Tag the next release. P3-1 adds flags, so v1.1.0 fits semantic
+      versioning. Verify one archive with `gh attestation verify` and a
+      modified copy (SEC-006), and consider linking "Upgrading from 1.0.0" in
+      the release notes.
+   6. Still open from M3: the SEC-003 and SEC-005 maintainer checks.
 5. **M5, depth:** P3-2 through P3-6, then P3-7 and P3-8 per decisions.
+   P5-2 (removing the empty TUI placeholders) is Ready and small; it can go
+   in any time.

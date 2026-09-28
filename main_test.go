@@ -54,6 +54,7 @@ func TestRunExitCodes(t *testing.T) {
 		{name: "passing check run", args: []string{"check", "run", "--only", "misconfig"}, want: internal.ExitCodePass, wantStdout: "[PASS] misconfig"},
 		{name: "group help", args: []string{"check"}, want: internal.ExitCodePass, wantStdout: "Available Commands:"},
 		{name: "unknown check", args: []string{"check", "run", "--only", "does-not-exist", "--json"}, want: internal.ExitCodeError, wantStderr: `unknown check "does-not-exist"`},
+		{name: "invalid threshold", args: []string{"check", "run", "--disk-warn", "95", "--json"}, want: internal.ExitCodeError, wantStderr: "--disk-warn (95) must be less than --disk-fail (90)"},
 		{name: "unknown flag", args: []string{"--no-such-flag"}, want: internal.ExitCodeError, wantStderr: "unknown flag"},
 		{name: "unknown subcommand flag", args: []string{"check", "run", "--no-such-flag"}, want: internal.ExitCodeError, wantStderr: "Run 'salus check run --help' for usage."},
 		{name: "unknown command", args: []string{"chek"}, want: internal.ExitCodeError, wantStderr: `unknown command "chek" for "salus"`},

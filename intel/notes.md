@@ -3,8 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-27 (against commit `753252e`, plus the uncommitted
-P2-3/P2-4 changes recorded in `history.md`).
+Last reviewed: 2026-09-27 (against `78db94e`, plus the uncommitted P2-6, P2-8,
+P3-1, P4-1, and P4-2 changes recorded in `history.md`).
 
 ## Engineering notes
 
@@ -138,7 +138,13 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   `--disk-path`.
 - **Thresholds are not configurable from the CLI.** `CheckOptions` supports
   warn/fail thresholds and a command timeout, but only `--disk-path` and
-  `--service` are exposed as flags.
+  `--service` are exposed as flags. *Resolved 2026-09-27 (P3-1):* `check run`
+  has `--disk-warn`, `--disk-fail`, `--mem-warn`, `--mem-fail`, `--load-warn`,
+  `--load-fail`, and `--timeout`, validated by `validateLimits` before
+  anything runs. The defaults moved from `health-thresholds.go` (Linux-only)
+  to `health.go`, because the flags need them on every platform. The flags
+  are accepted on macOS and Windows, where the resource checks still report
+  WARN until P3-7.
 - **Only reachability is checked for Docker.** The "Container Runtime"
   category description in `seed.go` mentions container health, but
   `docker-status` checks only daemon reachability.
@@ -163,6 +169,47 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   warnings could corrupt `--json`. *Resolved 2026-09-27 (P1-11):* the GORM
   logger is silent.
 
+### GitHub Actions maintenance (observed 2026-09-27)
+- **Node 20 deprecation sources.** Run annotations on `78db94e` and v1.0.1
+  flagged these actions, each with its fix:
+
+  | Action | Fix |
+  |---|---|
+  | `actions/checkout` v4.4.0 | Dependabot #21 → v7.0.1 |
+  | `actions/setup-go` v5.6.0 | #13 → v7.0.0 |
+  | `github/codeql-action` v3.38.1 | #18 → v4.38.2, all four sub-actions |
+  | `actions/upload-artifact` v4.6.2 and `download-artifact` v4.3.0 | #19 → v7.0.1 and v8.0.1 |
+  | `actions/github-script` v7.0.1, run inside `codecov/codecov-action` v5.5.5 | #20 → Codecov v7.1.1, which uses `github-script` v8.0.0 |
+  | `softprops/action-gh-release` v2.6.2 | local change to v3.0.3 |
+
+  `golangci/golangci-lint-action` v9.3.0 and `securego/gosec` (a Docker
+  action) are not flagged. Dependabot had not proposed softprops because five
+  PRs were already open, its default limit per ecosystem.
+- **Major-version notes checked for our usage:**
+  - checkout v6 stores credentials in a separate file, and v7 refuses fork
+    checkouts under `pull_request_target` and `workflow_run`. No workflow here
+    pushes or uses those triggers.
+  - setup-go v6 changed toolchain selection, but v7 still installs exactly Go
+    1.26.8 from `go.mod` (PR #13 logs).
+  - upload-artifact v7 adds opt-in unzipped uploads, so the default is
+    unchanged.
+  - download-artifact v8 fails on digest mismatches by default and skips
+    unzipping non-zip files. Our `pattern` plus `merge-multiple` usage is
+    unaffected.
+  - Codecov v7 changed only its signing key account.
+  - softprops v3 changes only the runtime.
+- **Rulesets.**
+  - `BestBranch` applies to every branch. It requires a pull request with one
+    code-owner approval, allows only merge commits, and requires CodeQL code
+    scanning to pass. It also blocks deletion and non-fast-forward pushes.
+  - `BestTag` blocks tag deletion and force pushes, so a failed release tag
+    cannot be reused.
+  - The repository admin role and some GitHub Apps can bypass both. That is why
+    the Dependabot PRs show `BLOCKED` until they are approved.
+- **Ubuntu 26.04.** `ubuntu-latest` moves to Ubuntu 26.04 in a rollout from
+  2026-10-19 to 2026-11-19 (actions/runner-images#14748). During the rollout a
+  job may land on either image. CD is pinned to 24.04 (Q-011).
+
 ### Documentation drift observed
 - The README install section referred to raw binaries named
   `salus_<os>_<arch>`, while `cd.yml` publishes `.tar.gz`/`.zip` archives
@@ -171,7 +218,11 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   verification.
 - The README has no build-from-source, prerequisites (Go 1.26 plus a C
   toolchain for CGO), configuration, testing, or project-structure sections,
-  all of which `AGENTS.md` lists for the README.
+  all of which `AGENTS.md` lists for the README. *Resolved 2026-09-27 (P4-1):*
+  the README follows the `AGENTS.md` section order and adds use cases,
+  prerequisites, build from source, provenance verification, an exit-code
+  table, testing and quality checks, and the project structure. macOS
+  Gatekeeper guidance is still missing, because it needs a check on a Mac.
 - `NOTICE` ended with "This product includes third-party software:" and an
   empty list after `7235211`. Resolved 2026-09-27: the list now matches the
   modules linked into the binary (`go list -deps` for linux, darwin, and
@@ -180,6 +231,17 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   expanded on 2026-09-27 (see `history.md`).
 - `AGENTS.md` refers to "`CONTRIBUTING.md `" with a trailing space in two
   places. Cosmetic.
+
+### Verification environment (2026-09-27 local session)
+A later session on the maintainer's workstation had Go 1.26.8, network access
+to `proxy.golang.org` and `vuln.go.dev`, and an authenticated GitHub CLI.
+golangci-lint v2.13.2, actionlint 1.7.12, and govulncheck v1.8.0 were built
+from source into a scratch directory. Limits:
+- The user cannot reach the Docker socket (permission denied), so the SEC-003
+  build-context check was not possible.
+- The fine-grained token cannot dispatch workflows (HTTP 403 on
+  `workflow_dispatch`), read Code Scanning alerts, or read branch protection.
+- The installed GitHub CLI (2.45.0) predates `gh attestation`.
 
 ### Verification environment (2026-09-27 analysis)
 The analysis environment could not reach `proxy.golang.org` or `go.dev`. The
@@ -205,5 +267,5 @@ Decisions recorded 2026-09-27 from the maintainer.
 | Q-007 | Should `.idea/` be ignored (the `.gitignore` line is commented out) or partially tracked? | `.idea/` shows as untracked and includes per-user `workspace.xml`. | **Track.** Done in `460a24b`. `.idea/.gitignore` keeps `workspace.xml` and other per-user files out. |
 | Q-008 | Should CI keep triggering on both `push` to every branch and `pull_request` to every branch? | Same-repo PR branches run CI twice. | **Yes, keep both triggers.** No change. |
 | Q-009 | Should gosec findings gate merges, and at what severity? | See SEC-005. | **No.** gosec stays non-blocking. Findings are triaged in GitHub Code Scanning. |
-| Q-010 | For SEC-006, is GitHub's immutable-release attestation (observed on v1.0.1, verifiable with `gh release verify-asset`) enough, or should releases also get build provenance attestations? | The release attestation shows an asset belongs to the release and was not changed afterwards. It does not show that the workflow built the asset. Build provenance adds `id-token: write` and `attestations: write` to the `release` job. | Open (raised 2026-09-27). |
-| Q-011 | Should CI and CD pin `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26 from 2026-10-19? | Pinning keeps release builds reproducible, but needs manual bumps. Staying on `latest` needs a CD `workflow_dispatch` run after the switch and before the next tag (P2-8). | Open (raised 2026-09-27). |
+| Q-010 | For SEC-006, is GitHub's immutable-release attestation (observed on v1.0.1, verifiable with `gh release verify-asset`) enough, or should releases also get build provenance attestations? | The release attestation shows an asset belongs to the release and was not changed afterwards. It does not show that the workflow built the asset. Build provenance adds `id-token: write` and `attestations: write` to the `release` job. | **Add build provenance** (2026-09-27). `actions/attest` runs in a CD `package` job that uses only first-party actions, on tag and manual runs; a separate `release` job publishes (P2-6, SEC-006). |
+| Q-011 | Should CI and CD pin `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26 from 2026-10-19? | Pinning keeps release builds reproducible, but needs manual bumps. Staying on `latest` needs a CD `workflow_dispatch` run after the switch and before the next tag (P2-8). | **Pin CD only** (2026-09-27). CD's linux/amd64 build and release job use `ubuntu-24.04`, matching linux/arm64 on `ubuntu-24.04-arm`. CI, Security, and Docker stay on `ubuntu-latest` for early warning. |
