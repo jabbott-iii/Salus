@@ -7,7 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-28 (against `2fd2496`; v1.0.2 is tagged at `08b2faa`).
+Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 changes:
+P3-2 to P3-6 and P5-2).
 
 ## 1. Purpose and scope
 
@@ -26,11 +27,10 @@ HTTP interface is ever added.
 | Layer | Files | Responsibility |
 |---|---|---|
 | Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`) and flag parsing. `check run` validates its threshold and timeout flags (`validateLimits`) and returns `*ExitStatusError` for WARN/FAIL. |
+| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`) and flag parsing. `check run` validates its threshold and timeout flags (`validateLimits`) and returns `*ExitStatusError` for WARN/FAIL. `jobs prune` parses `--older-than` with `parseAge`. |
 | Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
-| Reporting | `internal/report.go` | Text and JSON rendering, worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
-| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage and queries. |
-| Placeholders | `internal/logic-tui.go`, `internal/ui-form.go` | Empty files (package clause only), scheduled for removal because Salus is CLI-only (Q-001, `plan.md` P5-2). |
+| Reporting | `internal/report.go` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
+| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, and pruning. |
 
 All application code lives in the single package
 `github.com/jabbott-iii/Salus/internal`. Dependency direction today is:
@@ -100,6 +100,44 @@ authorization plus README and `history.md` updates:
   Changing these paths is a breaking change for existing users' history.
 - **`--service` values** must be systemd unit names (`validUnitName`).
   Anything else fails the check without running `systemctl` (SEC-001).
+- **`--kube-context` values** must pass `validKubeContext`:
+  - valid UTF-8 of at most 253 bytes;
+  - no control characters;
+  - not starting with `-`.
+
+  Context names have no fixed character set. Anything else fails
+  `kubernetes-status` without running `kubectl`. A valid name is passed as
+  one `--context=<name>` argument, never as a separate value, so it cannot
+  become another option.
+- **Check result semantics** (P3-2, P3-3, decided 2026-09-28):
+  - `docker-status` reports WARN when containers are unhealthy or restarting,
+    and FAIL only for an unreachable daemon.
+  - `kubernetes-status` reports WARN when some nodes are NotReady, and FAIL
+    when no node is Ready (including a cluster with no nodes).
+  - A Forbidden answer (`forbidden`) counts as reachable, because the API
+    server answered. This applies to `cluster-info`, which lists kube-system
+    Services and fails for namespace-scoped users, and to the node listing.
+    When listing nodes is forbidden, `kubernetes-status` stays PASS with a
+    note.
+  - The README table "What each check reports" must match the code.
+- **`misconfig` rule identifiers:** `home-unset`, `db-permissions`,
+  `kubeconfig-permissions`, `docker-socket-permissions`, and
+  `path-world-writable`, in that order (`misconfigRules`). Each problem is
+  reported as `<id>: <details>`, and problems are joined with `; `. Never
+  rename or reuse an id.
+- **Job JSON (`jobs list --json`, `jobs show --json`):**
+  - A job object has `id`, `status`, `started_at`, `finished_at` (null if
+    unfinished), and `summary`.
+  - `jobs show --json` adds `results`, whose objects have the `check run --json`
+    shape. `duration_ns` comes from stored milliseconds.
+  - `jobs list --json` prints `[]` when there are no jobs.
+- **`jobs prune`:**
+  - Requires `--older-than`, given as whole days (`30d`) or a Go duration
+    (`12h`).
+  - Deletes the jobs that started before now minus that age, together with
+    their results.
+  - `--dry-run` only counts them.
+  - A missing or invalid age exits 3 before the database opens.
 - **Database schema:** tables for `FeatureCategory`, `Feature`, `ScanJob`,
   `ScanResult` managed by GORM `AutoMigrate`.
 
@@ -144,6 +182,21 @@ authorization plus README and `history.md` updates:
   running any check, so input and storage errors are reported before slow
   checks run.
 - Outcome messages are a single line. Use `firstLine` on tool output.
+- Parse tool output defensively. The runner returns stdout and stderr
+  combined, so Docker CLI `WARNING` lines and kubectl klog lines can appear
+  among the data. `dockerServerVersion`, `containerNames`, and
+  `parseNodeReadiness` skip lines that do not match the expected format.
+  Error messages use `errorLine`, which skips those lines and the hint that
+  `kubectl cluster-info` prints on every run. Use `firstLine` only when the
+  first line carries the meaning, as with `systemctl is-active`.
+- Lists in messages go through `nameList`, which shows at most five items and
+  counts the rest.
+- A `misconfig` rule is a `misconfigRule`: a stable id and a function that
+  returns problem descriptions. It reads its inputs from the environment
+  (`KUBECONFIG`, `DOCKER_HOST`, `PATH`, `HOME`, `SALUS_DB_PATH`), so tests can
+  isolate it. The rules based on POSIX modes skip Windows. They also skip
+  paths on WSL drvfs mounts (`syntheticModes`, `health-mounts_linux.go`),
+  where the mode bits are made up.
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
   registry references.
@@ -189,6 +242,14 @@ authorization plus README and `history.md` updates:
   skips `:memory:` and `file:` URIs; the `misconfig` check uses the same
   helper.
 - Stored result messages are capped at 1024 bytes (`truncateMessage`).
+- `PruneScanJobs` deletes results explicitly, because the schema has no
+  foreign key from results to jobs. It selects jobs with a subquery, which
+  avoids SQLite's limit on bound variables. It compares times with
+  `julianday`, because stored times keep the UTC offset they were written
+  with, and the text sorts correctly only within one offset.
+- The seeded catalog is insert-only (`FirstOrCreate`), so changing a name or
+  description in `seed.go` does not update existing databases. Updating rows
+  on open would also break read-only databases, which must keep working.
 - Every `NewDatabase` must be paired with `Close`: `main.run` defers it, and
   `newTestDatabase` registers it with `t.Cleanup`. Windows cannot delete an
   open SQLite file, and `t.TempDir` cleanup fails if the handle stays open
@@ -234,7 +295,9 @@ authorization plus README and `history.md` updates:
   external tools, and fixture data with the `parse*` functions for `/proc`
   contents (`internal/health-resources_linux_test.go`).
 - Tests that read environment-dependent checks (`misconfig`) call
-  `isolateMisconfigEnv`. OS-specific expectations use `runtime.GOOS` with
+  `isolateMisconfigEnv`. It also points `KUBECONFIG` and `DOCKER_HOST` at
+  missing files and `PATH` at an owner-only directory. Tests in package
+  `main` use `isolateHostEnv`. OS-specific expectations use `runtime.GOOS` with
   `t.Skip`, never silent passes.
 - Commands are tested through `Execute()` with injected writers and
   arguments. `newCheckRunCmdWith` also takes the function that runs the

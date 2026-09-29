@@ -3,7 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-28 (against `2fd2496`; v1.0.2 is tagged at `08b2faa`).
+Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 changes:
+P3-2 to P3-6 and P5-2).
 
 ## Directory structure
 
@@ -14,29 +15,36 @@ Salus/
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
-│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show;
-│   │                           check run threshold/timeout flags + validateLimits
+│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show|prune;
+│   │                           check run threshold/timeout/--kube-context flags + validateLimits,
+│   │                           jobs --json, parseAge for jobs prune --older-than
 │   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence,
-│   │                           flag → CheckOptions mapping, threshold/timeout validation
+│   │                           flag → CheckOptions mapping, threshold/timeout validation,
+│   │                           jobs JSON shapes, jobs prune, parseAge
 │   ├── health.go               Check keys, options, threshold/timeout defaults, thresholdStatus,
-│   │                           registry, RunChecks, docker / kubernetes / service-uptime / misconfig checks
+│   │                           registry, RunChecks; docker (daemon + unhealthy/restarting containers),
+│   │                           kubernetes (reachability + node readiness, --kube-context),
+│   │                           service-uptime, misconfig rules (misconfigRules with stable ids)
 │   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux until P3-7)
 │   ├── health-resources_linux.go   disk (statfs), memory (/proc/meminfo),
 │   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
 │   ├── health-resources_other.go   Non-Linux stubs returning WARN
+│   ├── health-mounts_linux.go  syntheticModes: WSL drvfs detection from /proc/self/mounts
+│   ├── health-mounts_other.go  syntheticModes stub (false) for other platforms
+│   ├── health-mounts_linux_test.go  /proc/self/mounts fixtures for drvfs detection
 │   ├── health_test.go          Thresholds, RunChecks, report and exit-code helpers
-│   ├── checks_test.go          Docker/kubectl/systemctl/misconfig checks with fake tools (fakeToolOptions)
+│   ├── checks_test.go          Docker/kubectl/systemctl checks with fake tools (fakeToolOptions),
+│   │                           misconfig rules with isolated env (isolateMisconfigEnv)
 │   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL
-│   ├── report.go               Text/JSON output, WorstStatus, exit codes (ExitCodeFor, ExitStatusError, ExitCode)
+│   ├── report.go               Text/JSON output (outcomes; jobs for jobs list/show --json), WorstStatus,
+│   │                           exit codes (ExitCodeFor, ExitStatusError, ExitCode)
 │   ├── database.go             GORM models, NewDatabase (owner-only file) + AutoMigrate, OpenDatabase, Close
 │   ├── database-path.go        SALUS_DB_PATH / per-user default path per OS, databaseFile
 │   ├── database-path_test.go   Path resolution per OS, file modes, read-only and ?param handling
 │   ├── database_test.go
 │   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
-│   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob
-│   ├── scan-store_test.go
-│   ├── logic-tui.go            Empty placeholder, to be removed (CLI-only, Q-001)
-│   └── ui-form.go              Empty placeholder, to be removed (CLI-only, Q-001)
+│   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob, PruneScanJobs
+│   └── scan-store_test.go
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
 ├── .github/dependabot.yml      Weekly updates: gomod, github-actions (codeql-action + artifact-actions groups), docker
 ├── .github/workflows/
@@ -74,6 +82,7 @@ flowchart LR
     Root --> CheckRun["check run"]
     Root --> JobsList["jobs list"]
     Root --> JobsShow["jobs show"]
+    Root --> JobsPrune["jobs prune"]
 
     CheckRun --> RunChecks["RunChecks<br/>(health.go)"]
     CheckRun --> RecordScan["RecordScan<br/>(scan-store.go)"]
@@ -81,10 +90,11 @@ flowchart LR
     CheckList --> ListFeatures
     JobsList --> ListScanJobs
     JobsShow --> GetScanJob
+    JobsPrune --> PruneScanJobs["PruneScanJobs<br/>(one transaction)"]
 
     RunChecks --> Resources["disk / memory / cpu / uptime<br/>(/proc, statfs — Linux only)"]
     RunChecks --> Exec["exec.CommandContext<br/>docker · kubectl · systemctl"]
-    RunChecks --> Misconfig["misconfig<br/>(env vars, DB file mode)"]
+    RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket, PATH)"]
 
     NewDatabase --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)")]
     Seed --> SQLite
@@ -92,6 +102,7 @@ flowchart LR
     ListFeatures --> SQLite
     ListScanJobs --> SQLite
     GetScanJob --> SQLite
+    PruneScanJobs --> SQLite
 ```
 
 ## `check run` data flow

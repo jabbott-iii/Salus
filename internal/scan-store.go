@@ -140,6 +140,41 @@ func ListScanJobs(db *Database, limit int) ([]ScanJob, error) {
 	return jobs, nil
 }
 
+// startedBefore selects scan jobs that started before the given time.
+// julianday compares instants, so rows written under a different UTC offset
+// (for example across a daylight saving change) still compare correctly; the
+// stored text itself only sorts correctly within one offset.
+const startedBefore = "julianday(started_at) < julianday(?)"
+
+// PruneScanJobs deletes the scan jobs that started before cutoff, together
+// with their results, in one transaction, and returns how many jobs matched.
+// With dryRun it only counts them.
+func PruneScanJobs(db *Database, cutoff time.Time, dryRun bool) (int64, error) {
+	var pruned int64
+	err := db.Conn().Transaction(func(tx *gorm.DB) error {
+		if dryRun {
+			return tx.Model(&ScanJob{}).Where(startedBefore, cutoff).Count(&pruned).Error
+		}
+
+		// Results carry no foreign key constraint, so they are deleted
+		// explicitly. A subquery avoids SQLite's limit on bound variables.
+		oldJobs := tx.Model(&ScanJob{}).Select("id").Where(startedBefore, cutoff)
+		if err := tx.Where("scan_job_id IN (?)", oldJobs).Delete(&ScanResult{}).Error; err != nil {
+			return fmt.Errorf("delete scan results: %w", err)
+		}
+		deleted := tx.Where(startedBefore, cutoff).Delete(&ScanJob{})
+		if deleted.Error != nil {
+			return fmt.Errorf("delete scan jobs: %w", deleted.Error)
+		}
+		pruned = deleted.RowsAffected
+		return nil
+	})
+	if err != nil {
+		return 0, fmt.Errorf("prune scan jobs: %w", err)
+	}
+	return pruned, nil
+}
+
 // GetScanJob returns a single scan job and its results by ID.
 func GetScanJob(db *Database, id uint) (ScanJob, []ScanResult, error) {
 	var job ScanJob

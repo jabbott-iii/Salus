@@ -27,10 +27,22 @@ import (
 	"github.com/jabbott-iii/Salus/internal"
 )
 
+// isolateHostEnv hides the host's kubeconfig, Docker socket, and PATH from the
+// misconfig check, so it passes regardless of the machine running the tests.
+func isolateHostEnv(t *testing.T) {
+	t.Helper()
+
+	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing-kubeconfig"))
+	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(t.TempDir(), "missing-docker.sock"))
+	t.Setenv("PATH", t.TempDir())
+}
+
 // useTempDatabase points SALUS_DB_PATH at an owner-only file in a temp dir so
 // the misconfig check passes regardless of the process umask.
 func useTempDatabase(t *testing.T) {
 	t.Helper()
+
+	isolateHostEnv(t)
 
 	path := filepath.Join(t.TempDir(), "salus.db")
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
@@ -117,6 +129,7 @@ func TestRunOpensDatabaseOnlyWhenNeeded(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		t.Setenv("HOME", t.TempDir())
 	}
+	isolateHostEnv(t)
 
 	for _, args := range [][]string{
 		{"--version"},

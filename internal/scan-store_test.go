@@ -158,3 +158,75 @@ func TestTruncateMessage(t *testing.T) {
 		}
 	}
 }
+
+func TestPruneScanJobs(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	cutoff := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	record := func(startedAt time.Time) uint {
+		t.Helper()
+		job, err := RecordScan(db, startedAt, []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
+		if err != nil {
+			t.Fatalf("RecordScan() error = %v", err)
+		}
+		return job.ID
+	}
+
+	old := record(cutoff.Add(-30 * 24 * time.Hour))
+	// Stored times keep their UTC offset, and the text sorts by wall clock, so
+	// a plain string comparison would get these two wrong: 20:00+14:00 is
+	// 06:00 UTC (before the cutoff), and 08:00-08:00 is 16:00 UTC (after it).
+	east := record(time.Date(2026, 9, 1, 20, 0, 0, 0, time.FixedZone("UTC+14", 14*3600)))
+	west := record(time.Date(2026, 9, 1, 8, 0, 0, 0, time.FixedZone("UTC-8", -8*3600)))
+	recent := record(cutoff.Add(time.Hour))
+
+	countResults := func(ids ...uint) int64 {
+		t.Helper()
+		var n int64
+		if err := db.Conn().Model(&ScanResult{}).Where("scan_job_id IN ?", ids).Count(&n).Error; err != nil {
+			t.Fatalf("count results: %v", err)
+		}
+		return n
+	}
+	jobIDs := func() []uint {
+		t.Helper()
+		jobs, err := ListScanJobs(db, 0)
+		if err != nil {
+			t.Fatalf("ListScanJobs() error = %v", err)
+		}
+		var ids []uint
+		for _, job := range jobs {
+			ids = append(ids, job.ID)
+		}
+		return ids
+	}
+
+	n, err := PruneScanJobs(db, cutoff, true)
+	if err != nil || n != 2 {
+		t.Fatalf("PruneScanJobs(dry run) = %d, %v, want 2, nil", n, err)
+	}
+	if ids := jobIDs(); len(ids) != 4 {
+		t.Fatalf("dry run left jobs %v, want all 4", ids)
+	}
+
+	n, err = PruneScanJobs(db, cutoff, false)
+	if err != nil || n != 2 {
+		t.Fatalf("PruneScanJobs() = %d, %v, want 2, nil", n, err)
+	}
+	remaining := map[uint]bool{}
+	for _, id := range jobIDs() {
+		remaining[id] = true
+	}
+	if len(remaining) != 2 || !remaining[west] || !remaining[recent] {
+		t.Errorf("remaining jobs = %v, want only %d and %d", remaining, west, recent)
+	}
+	if n := countResults(old, east); n != 0 {
+		t.Errorf("pruned jobs still have %d results", n)
+	}
+	if n := countResults(west, recent); n != 2 {
+		t.Errorf("kept jobs have %d results, want 2", n)
+	}
+
+	if n, err := PruneScanJobs(db, cutoff, false); err != nil || n != 0 {
+		t.Errorf("second PruneScanJobs() = %d, %v, want 0, nil", n, err)
+	}
+}

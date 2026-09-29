@@ -1,3 +1,5 @@
+//go:build !linux
+
 /*
 Copyright 2026 Joseph Anthony Abbott III
 
@@ -15,3 +17,10 @@ limitations under the License.
 */
 
 package internal
+
+// syntheticModes reports whether path's POSIX mode bits are made up. Only WSL
+// drvfs mounts on Linux are detected (health-mounts_linux.go); the permission
+// rules skip Windows entirely.
+func syntheticModes(path string) bool {
+	return false
+}

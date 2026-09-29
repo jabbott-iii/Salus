@@ -5,21 +5,33 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-28 (against `2fd2496`, and v1.0.2 at `08b2faa` with its
-CD run #3).
+Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 and SEC-009
+changes; v1.0.2 is at `08b2faa`).
 
 ## Threat model summary
 
 - **Deployment:** Local CLI run by an operator, a cron job, or a CI step; also
   shipped as a container image. No network listener and no HTTP API.
-- **Trust boundaries:** Command-line flags and environment variables
-  (`SALUS_DB_PATH`, `--service`, `--disk-path`, `--only`); output of external
-  tools (`docker`, `kubectl`, `systemctl`); the SQLite file on disk; the
-  CI/CD supply chain (actions, base images, Go modules, release artifacts).
-- **Data handled:** Host health metadata: mount paths, service names, Docker
-  server version, the first line of external tool errors (which can include
-  cluster endpoints or host names), and timestamps. No credentials are read or
-  stored by Salus itself.
+- **Trust boundaries:**
+  - Command-line flags: `--service`, `--kube-context`, `--disk-path`,
+    `--only`, the thresholds, and `jobs prune --older-than`.
+  - Environment variables: `SALUS_DB_PATH`, `KUBECONFIG`, `DOCKER_HOST`,
+    `PATH`, and `HOME`.
+  - Output of external tools (`docker`, `kubectl`, `systemctl`), which a
+    hostile daemon or API server can control (SEC-009).
+  - The SQLite file on disk.
+  - The CI/CD supply chain: actions, base images, Go modules, and release
+    artifacts.
+- **Data handled:** Host health metadata:
+  - mount paths, service names, and the Docker server version;
+  - container and node names;
+  - kubeconfig, socket, and `PATH` directory paths;
+  - the first line of external tool errors, which can include cluster
+    endpoints or host names;
+  - timestamps.
+
+  Salus reads only the permission bits of kubeconfig files, never their
+  contents. No credentials are read or stored by Salus itself.
 
 ## Security requirements
 
@@ -43,12 +55,28 @@ CD run #3).
 10. Jobs that hold `id-token: write` run only first-party actions
     (`actions/*`). Any step in such a job can mint signing credentials for the
     workflow, so a third-party action there could forge provenance (SEC-006).
+11. Treat external tool output as untrusted. Parse it against the expected
+    format, and neutralize control characters before a message is printed or
+    stored (`sanitizeMessage`, SEC-009).
 
 ## Existing controls observed
 
 - External commands use `exec.CommandContext` with separate arguments and a
-  default 3s timeout (`health.go`).
-- Data access goes through GORM with struct conditions, with no raw SQL.
+  default 3s timeout (`health.go`, configurable with `--timeout`).
+- User values that reach external tools are validated first (requirement 2).
+  - `--service` is passed after `--` (SEC-001).
+  - `--kube-context` must pass `validKubeContext`: no leading `-`, no control
+    characters, valid UTF-8 of at most 253 bytes. It is passed as the single
+    argument `--context=<name>`.
+
+  Invalid values fail the check without running the tool.
+- `jobs prune` deletes through parameterized GORM queries (requirement 3).
+- The `misconfig` check reports insecure host settings: group- or
+  other-accessible database and kubeconfig files, a Docker socket writable by
+  all users, and `PATH` directories writable by all users.
+- Data access goes through GORM with struct conditions or string conditions
+  with `?` placeholders (`jobs prune` uses `julianday(started_at) <
+  julianday(?)`). No SQL is built from input.
 - Workflows declare `permissions: contents: read` at the top level. Only the
   CD `release` job requests `contents: write`, and `security.yml` requests
   `security-events: write` for SARIF upload.
@@ -513,3 +541,41 @@ GitHub, because the available token cannot read it.
     `Setup go version spec 1.26.8` and `go version go1.26.8`.
   - v1.0.2 (2026-09-28): the CD #3 `Build linux/amd64` log shows
     `Setup go version spec 1.26.8` and `go version go1.26.8`.
+
+### SEC-009: External tool output reaches the terminal and the database unfiltered
+
+- **Status:** In Progress (fixed in the working tree; awaiting CI)
+- **Affected component:** `internal/health.go` (check messages built from
+  `docker`, `kubectl`, and `systemctl` output) and `internal/logic-cli.go`
+  (`jobs show` text output)
+- **Risk:** Low. Check messages embed text from external tools: the first
+  line of an error, the Docker server version, and, since P3-2 and P3-3,
+  container and node names. A hostile or compromised Docker daemon or
+  Kubernetes API server controls that text, and it is reachable when
+  `DOCKER_HOST` or a kubeconfig points at it. The text could carry terminal
+  escape sequences:
+  - In the text report, they could rewrite the screen, for example to hide a
+    FAIL line or fake a PASS.
+  - They were stored in the database, and `jobs show` replayed them.
+
+  JSON output was only partly protected: `encoding/json` escapes C0 characters
+  such as ESC, but emits DEL and C1 characters (such as U+009B, a one-byte
+  CSI) unchanged. Found on 2026-09-28 while extending the threat model for M5.
+- **Required remediation:** Replace control characters in every check message
+  before it is printed or stored. Do the same for stored messages when
+  `jobs show` prints them as text.
+- **Validation:** Unit tests show that escape sequences from a fake tool are
+  replaced in `RunChecks` output, and that stored control characters are
+  replaced in `jobs show` text output. CI is green.
+- **Resolution:** Implemented 2026-09-28 (uncommitted); awaiting CI.
+  - `sanitizeMessage` replaces every Unicode control character (C0, DEL, and
+    C1) with `?`.
+  - `RunChecks` applies it to every outcome, so the report, `--json`, and the
+    database all get the cleaned text.
+  - `jobs show` applies it to stored messages, which covers rows written by
+    earlier versions. This covers both the text output and `--json`
+    (`WriteJobJSON`), because JSON does not escape DEL or C1 characters. An
+    independent review found the `--json` gap before commit.
+  - Tests: `TestSanitizeMessage`, `TestRunChecksSanitizesToolOutput`, and
+    `TestJobsShowSanitizesStoredMessages` (text and `--json`, with ESC, DEL,
+    and C1).

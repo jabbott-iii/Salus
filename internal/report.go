@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 )
 
 // WriteOutcomesText renders check outcomes as a human-readable, aligned report.
@@ -48,9 +49,57 @@ func WriteOutcomesText(w io.Writer, title string, outcomes []CheckOutcome, failO
 
 // WriteOutcomesJSON renders check outcomes as JSON.
 func WriteOutcomesJSON(w io.Writer, outcomes []CheckOutcome) error {
+	return writeJSON(w, outcomes)
+}
+
+// jobJSON is one recorded check run in the output of jobs list --json and
+// jobs show --json. finished_at is null for a run that never completed.
+type jobJSON struct {
+	ID         uint       `json:"id"`
+	Status     string     `json:"status"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at"`
+	Summary    string     `json:"summary"`
+}
+
+func newJobJSON(job ScanJob) jobJSON {
+	return jobJSON{ID: job.ID, Status: job.Status, StartedAt: job.StartedAt, FinishedAt: job.FinishedAt, Summary: job.Summary}
+}
+
+// WriteJobsJSON renders recorded check runs as a JSON array.
+func WriteJobsJSON(w io.Writer, jobs []ScanJob) error {
+	out := make([]jobJSON, 0, len(jobs))
+	for _, job := range jobs {
+		out = append(out, newJobJSON(job))
+	}
+	return writeJSON(w, out)
+}
+
+// WriteJobJSON renders one recorded check run and its results. Each result
+// has the check run --json object shape; stored durations have millisecond
+// precision. Messages are sanitized like in RunChecks, because rows stored
+// before SEC-009 may hold DEL or C1 control characters, which JSON leaves
+// unescaped.
+func WriteJobJSON(w io.Writer, job ScanJob, results []ScanResult) error {
+	outcomes := make([]CheckOutcome, 0, len(results))
+	for _, r := range results {
+		outcomes = append(outcomes, CheckOutcome{
+			Key:      r.Key,
+			Status:   CheckStatus(r.Status),
+			Message:  sanitizeMessage(r.Message),
+			Duration: time.Duration(r.DurationMs) * time.Millisecond,
+		})
+	}
+	return writeJSON(w, struct {
+		jobJSON
+		Results []CheckOutcome `json:"results"`
+	}{newJobJSON(job), outcomes})
+}
+
+func writeJSON(w io.Writer, v any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(outcomes)
+	return encoder.Encode(v)
 }
 
 // WorstStatus returns the most severe status among the given outcomes,

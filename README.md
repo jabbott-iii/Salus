@@ -19,20 +19,24 @@ SQLite database for later review (unless you pass `--no-save`).
 
 - **Container Runtime**
   - Docker daemon reachability
+  - Containers that fail their `HEALTHCHECK` or keep restarting
 
 - **Orchestration**
-  - Kubernetes cluster reachability via `kubectl`
+  - Kubernetes cluster reachability and node readiness via `kubectl`, for the
+    current or a chosen kubeconfig context
 
 - **Services**
   - systemd service uptime (or host uptime when no service is specified)
 
 - **Configuration**
-  - Common environment misconfigurations (`HOME` not set, a database file that
-    other users can read or write)
+  - Common environment misconfigurations: `HOME` not set, a database or
+    kubeconfig file that other users can access, a Docker socket that every
+    user can write to, and `PATH` directories that every user can write to
 
 - **Job Tracking**
   - Every `check run` is recorded as a job in a local SQLite database
-  - Browse past runs and their individual results
+  - Browse past runs and their individual results, as text or JSON
+  - Delete old runs with `jobs prune`
 
 - **Scripting**
   - Text or JSON output, and exit codes that reflect the worst result
@@ -56,8 +60,11 @@ with `--service` requires systemd, so it is also Linux-only.
 - **Service verification.** Confirm that a systemd unit is active after a
   deployment: `salus check run --only service-uptime --service nginx`.
 - **Workstation checks.** Before working with containers or a cluster, confirm
-  that the Docker daemon and the current `kubectl` context respond:
+  that the Docker daemon, its containers, and the cluster's nodes are healthy:
   `salus check run --only docker-status,kubernetes-status --no-save`.
+- **Long-running history.** Export every past run with
+  `salus jobs list --limit 0 --json`, and keep the database small under cron
+  with `salus jobs prune --older-than 30d`.
 
 ## Prerequisites
 
@@ -68,7 +75,10 @@ To run a release binary:
 - Optional tools, used by individual checks when they are on `PATH`: the
   `docker` CLI (`docker-status`), `kubectl` with a configured context
   (`kubernetes-status`), and `systemctl` (`service-uptime` with `--service`,
-  Linux only). A missing tool makes its check report `WARN`.
+  Linux only). A missing tool makes its check report `WARN`. Node readiness
+  needs permission to list nodes; without it, `kubernetes-status` checks only
+  that the cluster is reachable. An answer of Forbidden from the API server
+  counts as reachable.
 
 To build from source:
 
@@ -202,11 +212,15 @@ salus check run --json
 salus check run --fail-only
 salus check run --disk-path /data
 salus check run --disk-warn 70 --disk-fail 85 --timeout 10s
+salus check run --only kubernetes-status --kube-context kind-dev
 ```
 
 Flags for `check run`:
 - `--only` — comma-separated list of checks to run (default: all)
 - `--service` — systemd service name to check uptime for (defaults to host uptime)
+- `--kube-context` — kubeconfig context for `kubernetes-status` (defaults to
+  kubectl's current context). A name that starts with `-` or contains control
+  characters fails the check without running `kubectl`.
 - `--disk-path` — mount path to check for free disk space (default `/`)
 - `--disk-warn`, `--disk-fail` — disk usage percent at which `disk-space`
   reports WARN and FAIL (defaults `80` and `90`)
@@ -229,6 +243,30 @@ you set a FAIL value below the default WARN value, lower the WARN value too
 such as `500ms`, `10s`, or `1m` and must be positive. Salus rejects an invalid
 value before running any check.
 
+What each check reports:
+
+| Check | PASS | WARN | FAIL |
+|---|---|---|---|
+| `disk-space`, `memory`, `cpu-load` | Below the WARN threshold | At or above the WARN threshold; not Linux | At or above the FAIL threshold; data unreadable |
+| `docker-status` | Daemon reachable, no unhealthy or restarting containers | Unhealthy or restarting containers; container list unavailable; no `docker` CLI | Daemon unreachable |
+| `kubernetes-status` | Cluster reachable and every node Ready, or listing nodes is forbidden | Some nodes NotReady; readiness unknown; no `kubectl` CLI | Cluster unreachable (a Forbidden answer counts as reachable); no node Ready; invalid `--kube-context` |
+| `service-uptime` | Service active, or host uptime readable | Service activating or reloading; not Linux or no `systemctl` | Service not active; invalid `--service` |
+| `misconfig` | No problems found | One or more of the problems below | — |
+
+The `misconfig` message lists each problem as `<rule>: <details>`, separated
+by `; `. The rule identifiers are stable:
+
+| Rule | Problem |
+|---|---|
+| `home-unset` | `HOME` is not set (not checked on Windows) |
+| `db-permissions` | The database file is accessible by group or other users |
+| `kubeconfig-permissions` | A file in `KUBECONFIG` (or `~/.kube/config`) is accessible by group or other users |
+| `docker-socket-permissions` | The Docker socket (`/var/run/docker.sock`, or the `unix://` path in `DOCKER_HOST`) is writable by all users |
+| `path-world-writable` | A `PATH` directory is writable by all users (an empty entry means the current directory) |
+
+The permission rules are not checked on Windows, or on Windows drives that WSL
+mounts (drvfs, such as `/mnt/c`), whose permission bits are not real.
+
 With `--json`, `check run` prints an array with one object per check;
 `duration_ns` is the check's run time in nanoseconds:
 ```json
@@ -246,13 +284,34 @@ With `--json`, `check run` prints an array with one object per check;
 
 - `salus jobs list` — list recent health check runs
 - `salus jobs show [job-id]` — show details for a specific run
+- `salus jobs prune --older-than <age>` — delete runs that started longer ago
+  than `<age>`, with their results
 
 Examples:
 ```bash
 salus jobs list
-salus jobs list --limit 50
+salus jobs list --limit 50 --json
 salus jobs show 7
+salus jobs show 7 --json
+salus jobs prune --older-than 30d --dry-run
+salus jobs prune --older-than 12h
 ```
+
+Flags:
+- `jobs list --limit` — maximum number of jobs to list (default `20`; `0`
+  lists all)
+- `jobs list --json`, `jobs show --json` — output as JSON
+- `jobs prune --older-than` — required age: a whole number of days such as
+  `30d`, or a duration such as `12h` or `90m`
+- `jobs prune --dry-run` — report how many runs would be deleted, without
+  deleting them
+
+`jobs list --json` prints an array of jobs with `id`, `status`, `started_at`,
+`finished_at` (`null` if the run never finished), and `summary`.
+`jobs show --json` prints one job with the same fields plus `results`, whose
+objects have the `check run --json` shape (`duration_ns` comes from a stored
+value with millisecond precision). Pruning frees space inside the database
+file for new runs; the file itself does not shrink.
 
 ### Exit codes
 
@@ -274,8 +333,8 @@ example, clean JSON with `--json`).
 
 Salus stores job history in a SQLite database. The database is created on the
 first command that needs it (`check run` without `--no-save`, `check list`,
-`jobs list`, `jobs show`); `--help`, `--version`, and `check run --no-save`
-never create it.
+`jobs list`, `jobs show`, `jobs prune`); `--help`, `--version`, and
+`check run --no-save` never create it.
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -295,6 +354,18 @@ is readable or writable by group or other users (on Linux and macOS).
 
 Check thresholds and the command timeout are set for each run with the
 `check run` flags above. There is no configuration file.
+
+### Upgrading from 1.0.2
+
+These changes can raise the exit code on hosts that passed before:
+
+- `docker-status` reports `WARN` when containers are unhealthy or restarting.
+- `kubernetes-status` checks node readiness: `WARN` when some nodes are
+  NotReady, and `FAIL` when no node is Ready.
+- `misconfig` also checks kubeconfig files, the Docker socket, and `PATH`
+  directories. Every problem now starts with its rule identifier (for example
+  `db-permissions: ...`), so scripts that match `misconfig` messages must
+  allow for the prefix.
 
 ### Upgrading from 1.0.0
 

@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -405,14 +406,14 @@ func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
 		{
 			name: "overrides",
 			args: []string{
-				"--disk-path", "/data", "--service", "nginx",
+				"--disk-path", "/data", "--service", "nginx", "--kube-context", "prod",
 				"--disk-warn", "70", "--disk-fail", "85.5",
 				"--mem-warn", "60", "--mem-fail", "95",
 				"--load-warn", "150", "--load-fail", "300",
 				"--timeout", "10s",
 			},
 			want: CheckOptions{
-				DiskPath: "/data", ServiceName: "nginx",
+				DiskPath: "/data", ServiceName: "nginx", KubeContext: "prod",
 				DiskWarnPercent: 70, DiskFailPercent: 85.5,
 				MemWarnPercent: 60, MemFailPercent: 95,
 				LoadWarnPercent: 150, LoadFailPercent: 300,
@@ -494,5 +495,259 @@ func TestCheckRunRejectsInvalidLimits(t *testing.T) {
 				t.Errorf("ExitCode(%v) = %d, want %d", err, got, ExitCodeError)
 			}
 		})
+	}
+}
+
+// executeJobs runs cmd with args and returns stdout and the error.
+func executeJobs(t *testing.T, cmd *cobra.Command, args ...string) (string, error) {
+	t.Helper()
+
+	var stdout bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return stdout.String(), err
+}
+
+// jsonKeys returns the sorted keys of a JSON object.
+func jsonKeys(t *testing.T, raw json.RawMessage) string {
+	t.Helper()
+
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &object); err != nil {
+		t.Fatalf("unmarshal object %s: %v", raw, err)
+	}
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+func TestJobsListJSON(t *testing.T) {
+	db := newSeededTestDatabase(t)
+
+	stdout, err := executeJobs(t, newJobsListCmd(openerFor(db)), "--json")
+	if err != nil || stdout != "[]\n" {
+		t.Fatalf("jobs list --json on an empty database = %q, %v, want \"[]\\n\"", stdout, err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if _, err := RecordScan(db, time.Now(), []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}}); err != nil {
+			t.Fatalf("RecordScan() error = %v", err)
+		}
+	}
+	stdout, err = executeJobs(t, newJobsListCmd(openerFor(db)), "--json")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		t.Fatalf("output is not a JSON array: %v\n%s", err, stdout)
+	}
+	if len(raw) != 2 {
+		t.Fatalf("got %d jobs, want 2", len(raw))
+	}
+	if keys := jsonKeys(t, raw[0]); keys != "finished_at,id,started_at,status,summary" {
+		t.Errorf("job keys = %s", keys)
+	}
+	var jobs []struct {
+		ID         uint       `json:"id"`
+		Status     string     `json:"status"`
+		FinishedAt *time.Time `json:"finished_at"`
+		Summary    string     `json:"summary"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &jobs); err != nil {
+		t.Fatalf("unmarshal jobs: %v", err)
+	}
+	if jobs[0].ID != 2 || jobs[1].ID != 1 {
+		t.Errorf("job order = %d, %d, want newest first (2, 1)", jobs[0].ID, jobs[1].ID)
+	}
+	if jobs[0].Status != "completed" || jobs[0].FinishedAt == nil || jobs[0].Summary != "1 pass, 0 warn, 0 fail" {
+		t.Errorf("job = %+v, want a completed job with a finish time and summary", jobs[0])
+	}
+}
+
+func TestJobsShowJSON(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	outcomes := []CheckOutcome{
+		{Key: keyMisconfig, Status: StatusPass, Message: "ok", Duration: 1500 * time.Millisecond},
+		{Key: keyDiskSpace, Status: StatusWarn, Message: "/: 85.0% used (15.0% free)", Duration: 2 * time.Millisecond},
+	}
+	job, err := RecordScan(db, time.Now(), outcomes)
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+
+	stdout, err := executeJobs(t, newJobsShowCmd(openerFor(db)), strconv.Itoa(int(job.ID)), "--json")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if keys := jsonKeys(t, json.RawMessage(stdout)); keys != "finished_at,id,results,started_at,status,summary" {
+		t.Errorf("job keys = %s", keys)
+	}
+
+	var got struct {
+		ID      uint              `json:"id"`
+		Summary string            `json:"summary"`
+		Results []json.RawMessage `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("unmarshal job: %v\n%s", err, stdout)
+	}
+	if got.ID != job.ID || got.Summary != "1 pass, 1 warn, 0 fail" || len(got.Results) != 2 {
+		t.Fatalf("job = %+v, want id %d with 2 results", got, job.ID)
+	}
+	// Results use the check run --json object shape.
+	if keys := jsonKeys(t, got.Results[0]); keys != "duration_ns,key,message,status" {
+		t.Errorf("result keys = %s", keys)
+	}
+	var first CheckOutcome
+	if err := json.Unmarshal(got.Results[0], &first); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if first != outcomes[0] {
+		t.Errorf("first result = %+v, want %+v", first, outcomes[0])
+	}
+}
+
+func TestJobsJSONReturnsWriteError(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	job, err := RecordScan(db, time.Now(), []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	expectedErr := errors.New("write failed")
+
+	for name, cmd := range map[string]*cobra.Command{
+		"list": newJobsListCmd(openerFor(db)),
+		"show": newJobsShowCmd(openerFor(db)),
+	} {
+		t.Run(name, func(t *testing.T) {
+			args := []string{"--json"}
+			if name == "show" {
+				args = append(args, strconv.Itoa(int(job.ID)))
+			}
+			cmd.SetOut(failingWriter{err: expectedErr})
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs(args)
+			if err := cmd.Execute(); !errors.Is(err, expectedErr) {
+				t.Fatalf("Execute() error = %v, want %v", err, expectedErr)
+			}
+		})
+	}
+}
+
+func TestJobsPrune(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	for _, age := range []time.Duration{40 * 24 * time.Hour, time.Minute} {
+		if _, err := RecordScan(db, time.Now().Add(-age), []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}}); err != nil {
+			t.Fatalf("RecordScan() error = %v", err)
+		}
+	}
+
+	stdout, err := executeJobs(t, newJobsPruneCmd(openerFor(db)), "--older-than", "30d", "--dry-run")
+	if err != nil || !strings.HasPrefix(stdout, "Would delete 1 job started before ") {
+		t.Fatalf("jobs prune --dry-run = %q, %v, want a count of 1", stdout, err)
+	}
+	if n := countScanJobs(t, db); n != 2 {
+		t.Fatalf("--dry-run left %d jobs, want 2", n)
+	}
+
+	stdout, err = executeJobs(t, newJobsPruneCmd(openerFor(db)), "--older-than", "30d")
+	if err != nil || !strings.HasPrefix(stdout, "Deleted 1 job started before ") {
+		t.Fatalf("jobs prune = %q, %v, want 1 deleted", stdout, err)
+	}
+	if n := countScanJobs(t, db); n != 1 {
+		t.Fatalf("%d jobs remain, want 1", n)
+	}
+
+	stdout, err = executeJobs(t, newJobsPruneCmd(openerFor(db)), "--older-than", "30d")
+	if err != nil || !strings.HasPrefix(stdout, "Deleted 0 jobs started before ") {
+		t.Errorf("second jobs prune = %q, %v, want 0 deleted", stdout, err)
+	}
+}
+
+func TestJobsPruneRejectsInvalidAges(t *testing.T) {
+	tests := []struct {
+		args    []string
+		wantErr string
+	}{
+		{nil, "--older-than is required"},
+		{[]string{"--older-than", "30x"}, `invalid --older-than value "30x": use a whole number of days`},
+		{[]string{"--older-than", "0d"}, `invalid --older-than value "0d": must be greater than 0`},
+		{[]string{"--older-than=-2h"}, `invalid --older-than value "-2h": must be greater than 0`},
+		{[]string{"--older-than", "30d", "extra"}, `unknown command "extra"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			_, err := executeJobs(t, newJobsPruneCmd(neverOpen(t)), tt.args...)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Execute(%q) error = %v, want it to contain %q", tt.args, err, tt.wantErr)
+			}
+			if got := ExitCode(err); got != ExitCodeError {
+				t.Errorf("ExitCode(%v) = %d, want %d", err, got, ExitCodeError)
+			}
+		})
+	}
+}
+
+func TestParseAge(t *testing.T) {
+	valid := map[string]time.Duration{
+		"30d":   30 * 24 * time.Hour,
+		"+2d":   48 * time.Hour,
+		"12h":   12 * time.Hour,
+		"90m":   90 * time.Minute,
+		"1h30m": 90 * time.Minute,
+		"1s":    time.Second,
+	}
+	for in, want := range valid {
+		if got, err := parseAge(in); err != nil || got != want {
+			t.Errorf("parseAge(%q) = %v, %v, want %v", in, got, err, want)
+		}
+	}
+
+	maxDays := strconv.FormatInt(maxAgeDays, 10) + "d"
+	if _, err := parseAge(maxDays); err != nil {
+		t.Errorf("parseAge(%q) error = %v, want the largest day count accepted", maxDays, err)
+	}
+	for _, in := range []string{"", "d", "0d", "-1d", "-9223372036854775807d", strconv.FormatInt(maxAgeDays+1, 10) + "d", "1.5d", "30", "0", "-5m", "30D", "thirty days"} {
+		if got, err := parseAge(in); err == nil {
+			t.Errorf("parseAge(%q) = %v, want an error", in, got)
+		}
+	}
+}
+
+func TestJobsShowSanitizesStoredMessages(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	// Versions before SEC-009 stored tool output unfiltered.
+	job, err := RecordScan(db, time.Now(), []CheckOutcome{{Key: keyDocker, Status: StatusFail, Message: "\x1b[2J\x1b[Hdocker daemon unreachable"}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+
+	stdout, err := executeJobs(t, newJobsShowCmd(openerFor(db)), strconv.Itoa(int(job.ID)))
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if strings.ContainsRune(stdout, '\x1b') || !strings.Contains(stdout, "?[2J?[Hdocker daemon unreachable") {
+		t.Errorf("jobs show output = %q, want control characters replaced", stdout)
+	}
+
+	// JSON escapes C0 characters, but not DEL or C1 ones.
+	job, err = RecordScan(db, time.Now(), []CheckOutcome{{Key: keyDocker, Status: StatusFail, Message: "del\x7f c1\u009b[2J"}})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	stdout, err = executeJobs(t, newJobsShowCmd(openerFor(db)), strconv.Itoa(int(job.ID)), "--json")
+	if err != nil {
+		t.Fatalf("Execute(--json) error = %v", err)
+	}
+	if strings.ContainsAny(stdout, "\x7f\u009b") || !strings.Contains(stdout, `"message": "del? c1?[2J"`) {
+		t.Errorf("jobs show --json output = %q, want control characters replaced", stdout)
 	}
 }

@@ -3,7 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-28 (against `2fd2496`, and v1.0.2 at `08b2faa`).
+Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 and SEC-009
+changes; v1.0.2 is at `08b2faa`).
 
 ## Engineering notes
 
@@ -13,8 +14,8 @@ Last reviewed: 2026-09-28 (against `2fd2496`, and v1.0.2 at `08b2faa`).
   - the `Dockerfile` comment "Persist sqlite database file (rete.db)";
   - the `Dockerfile` comment "This app is an interactive TUI/CLI". Salus has
     no TUI today;
-  - empty `internal/logic-tui.go` and `internal/ui-form.go` (to be removed;
-    Salus is CLI-only per Q-001);
+  - empty `internal/logic-tui.go` and `internal/ui-form.go`. *Removed
+    2026-09-28 (P5-2), because Salus is CLI-only per Q-001;*
   - before `7235211`, `NOTICE` listed `charmbracelet/bubbletea` and
     `charmbracelet/lipgloss`, which are not in `go.mod`.
 
@@ -85,6 +86,17 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
     input (`--service`) is validated and follows `--` (SEC-001).
   - G304 (`createDatabaseFile`): the path is the user's own `SALUS_DB_PATH` or
     per-user default, by design.
+  - *Update 2026-09-28 (v2.29.0 on the M5 working tree):* six findings. The
+    two new ones are G703 (path traversal via taint analysis, HIGH):
+    `os.Stat` in `ownerOnly` and `worldWritablePath` (`internal/health.go`).
+    Both are false positives:
+    - The paths come from the invoking user's own `SALUS_DB_PATH`,
+      `KUBECONFIG`, `PATH`, and home directory.
+    - They are only stat'ed for permission bits, never opened.
+    - No privilege boundary is crossed.
+
+    Following Q-009, they are triaged (dismissed as false positives) in Code
+    Scanning, not suppressed in code.
 - **Container image (P2-3, 2026-09-27).**
   - `golang:1.26-alpine` had moved to Alpine 3.24 while the runtime stage was
     `alpine:3.22`, so the binary was linked against a newer musl than it ran
@@ -133,7 +145,10 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
 - **Multi-line messages.** *Resolved 2026-09-27 (P1-7):* `service-uptime` uses
   only the first line of `systemctl` output. Still open: on success,
   `docker-status` embeds the full combined output of `docker info`, so stderr
-  warnings could make that message multi-line.
+  warnings could make that message multi-line. *Resolved 2026-09-28 (P3-2):*
+  `dockerServerVersion` takes the first line that is not blank and not a
+  `WARNING`. Since SEC-009, `RunChecks` also replaces any control character,
+  including newlines, in every message.
 - **Running inside containers.** `/proc/meminfo` and `/proc/loadavg` report
   host-wide values, not cgroup limits, and `disk-space` measures the
   container filesystem unless a host path is mounted and passed with
@@ -149,7 +164,46 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   WARN until P3-7.
 - **Only reachability is checked for Docker.** The "Container Runtime"
   category description in `seed.go` mentions container health, but
-  `docker-status` checks only daemon reachability.
+  `docker-status` checks only daemon reachability. *Resolved 2026-09-28
+  (P3-2):* unhealthy or restarting containers make it WARN.
+- **Container and node queries (P3-2, P3-3).**
+  - Unhealthy containers come from `docker ps --filter health=unhealthy`, which
+    lists only running containers, so a stopped container with a stale health
+    status is not reported.
+  - Restarting containers come from
+    `docker ps --all --filter status=restarting`.
+  - Node readiness comes from `kubectl get nodes` with a JSONPath that prints
+    each node's `Ready` condition.
+  - A Forbidden error is detected in the output text. It keeps the check PASS,
+    because namespace-scoped users cannot list nodes.
+  - Each query has its own `--timeout`. `docker-status` runs up to three
+    commands (`info` and two listings), and `kubernetes-status` up to two, so
+    a check can take up to three or two timeouts.
+  - `kubectl cluster-info` lists Services in `kube-system`, which
+    namespace-scoped users may not do. It prints its "To further debug…" hint
+    on stdout before the error. A Forbidden answer therefore counts as
+    reachable, and `errorLine` skips the hint and kubectl's log lines, as
+    noted by the independent review of 2026-09-28.
+- **WSL (review finding, 2026-09-28).**
+  - WSL mounts Windows drives with drvfs (`/mnt/c`): type `drvfs` on WSL 1,
+    and `9p` with `aname=drvfs` on WSL 2. Their mode bits are made up,
+    commonly 0777.
+  - WSL also appends the Windows `PATH` by default. `path-world-writable`
+    would otherwise warn on every default WSL host, and a kubeconfig or
+    database kept on a Windows drive would trip the permission rules.
+  - `syntheticModes` reads `/proc/self/mounts`, and the permission rules skip
+    such paths. It is not verified on a WSL host; the tests use mount
+    fixtures.
+- **Seeded catalog text is insert-only.** `EnsureDefaultFeatures` uses
+  `FirstOrCreate`, so changes to names or descriptions in `seed.go` reach only
+  new databases. Updating rows on every open would break read-only databases.
+  The `docker-status` and `kubernetes-status` descriptions ("reachable") were
+  therefore left as they are, and the README describes the full behavior.
+- **Pruning and time zones (P3-6).** Stored `started_at` values keep the UTC
+  offset they were written with, and the text sorts correctly only within one
+  offset. `PruneScanJobs` compares with `julianday`, and a test mixes UTC+14
+  and UTC-8 rows. Pruning frees pages inside the SQLite file but does not
+  shrink it; `VACUUM` was not added.
 - **Test depending on the host.** *Resolved 2026-09-27 (P1-8):* external tools
   are faked in tests (`fakeToolOptions`), and no test runs `docker`,
   `kubectl`, or `systemctl`. On Linux, `TestRunChecksDefaultsToAllChecks`

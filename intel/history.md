@@ -432,3 +432,89 @@ reconstructed from commit messages and diffs, not first-hand records.
   - The maintainer approved the archive download and the release-notes edit
     for this session.
   - Uncommitted at the time of writing.
+
+## 2026-09-28: M5 check depth (P3-2 to P3-6), TUI placeholders removed, SEC-009 fixed; P2-8 closed
+
+- Change:
+  - P2-8 closed by maintainer decision, without a manual CD run on `main`.
+    The next tag is the first CD run with the updated artifact pins.
+  - `docker-status` (P3-2) reports WARN for unhealthy or restarting
+    containers, naming up to five. The Docker CLI's `WARNING` lines are no
+    longer taken as the server version or as container names.
+  - `kubernetes-status` (P3-3) checks node readiness:
+    - WARN when some nodes are NotReady;
+    - FAIL when no node is Ready;
+    - PASS with a note when listing nodes is forbidden.
+
+    The new `check run --kube-context` flag is validated and passed as one
+    `--context=<name>` argument.
+  - `misconfig` (P3-4) runs five rules with stable ids: `home-unset`,
+    `db-permissions`, `kubeconfig-permissions`,
+    `docker-socket-permissions`, and `path-world-writable`. Each problem is
+    reported as `<id>: <details>`.
+  - `jobs list --json` and `jobs show --json` (P3-5). Job results use the
+    `check run --json` shape.
+  - `jobs prune --older-than <age> [--dry-run]` (P3-6) deletes old jobs and
+    their results in one transaction, comparing times with `julianday`.
+  - Removed the empty `internal/logic-tui.go` and `internal/ui-form.go`
+    (P5-2, Q-001).
+  - SEC-009 (new, fixed): check messages had embedded external tool output
+    unfiltered. `RunChecks` and `jobs show` now replace control characters.
+  - The maintainer decided the severities for P3-2 (WARN) and P3-3 (graded).
+    The README gains a per-check PASS/WARN/FAIL table, the misconfig rule ids,
+    and an "Upgrading from 1.0.2" section for the changes that can raise exit
+    codes.
+- Files: `internal/health.go`, `internal/logic-cli.go`, `internal/report.go`,
+  `internal/scan-store.go`, `internal/checks_test.go`,
+  `internal/logic-cli_test.go`, `internal/scan-store_test.go`, `main_test.go`,
+  `internal/logic-tui.go` (deleted), `internal/ui-form.go` (deleted),
+  `README.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
+  `intel/notes.md`, `intel/plan.md`, `intel/history.md`
+- Reason / reference: plan milestone M5 and P5-2. SEC-009 was found while
+  extending the threat model for the new tool output.
+  - Validated locally on Linux; see the completion report for the commands.
+  - macOS and Windows execution is left to CI.
+  - Uncommitted at the time of writing.
+
+## 2026-09-28: Review fixes to M5 and SEC-009 (uncommitted)
+
+- Change: An independent review of the previous entry's uncommitted changes
+  led to these corrections before commit:
+  - `kubernetes-status`: a Forbidden answer from `kubectl cluster-info` now
+    counts as reachable. `cluster-info` lists kube-system Services, so
+    namespace-scoped users previously got FAIL with kubectl's "To further
+    debug" hint as the message.
+  - New `errorLine`: failure messages skip Docker CLI `WARNING` lines,
+    kubectl log lines, and that hint.
+  - `--kube-context` accepts any valid UTF-8 name of at most 253 bytes that
+    does not start with `-` and has no control characters. It is still passed
+    as one `--context=<name>` argument.
+  - The `misconfig` permission rules skip WSL drvfs paths (`syntheticModes`,
+    new `internal/health-mounts_linux.go` and `_other.go`). WSL appends the
+    Windows `PATH`, whose made-up 0777 modes would otherwise warn on every
+    default WSL host.
+  - SEC-009: `jobs show --json` now also sanitizes stored messages, because
+    JSON does not escape DEL or C1 characters. The earlier claim that JSON
+    was unaffected is corrected in `intel/cybersec.md`. SEC-009 remains In
+    Progress until CI runs; the previous entry's "fixed" means fixed in the
+    working tree.
+  - `DOCKER_HOST=unix://` without a path now means the default socket.
+  - New tests cover these cases and the two mutations the review found
+    surviving.
+  - Documentation:
+    - the README notes the WSL skip, `--limit 0`, and that `jobs prune`
+      creates the database;
+    - the `notes.md` gosec baseline records two new G703 false positives
+      (`os.Stat` on paths from the user's own environment), to be triaged in
+      Code Scanning;
+    - the `notes.md` timeout wording is corrected.
+- Files: `internal/health.go`, `internal/health-mounts_linux.go` (new),
+  `internal/health-mounts_other.go` (new),
+  `internal/health-mounts_linux_test.go` (new), `internal/report.go`,
+  `internal/checks_test.go`, `internal/logic-cli_test.go`, `README.md`,
+  `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`, `intel/notes.md`,
+  `intel/plan.md`, `intel/history.md`
+- Reason / reference: the independent review of 2026-09-28. The whitespace
+  change in `AGENTS.md` in the same working tree was made by the maintainer,
+  not by this work.
+  - Uncommitted at the time of writing.

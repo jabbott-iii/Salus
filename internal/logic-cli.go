@@ -183,6 +183,7 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOpt
 
 	cmd.Flags().StringSliceVar(&only, "only", nil, "comma-separated list of checks to run (default: all)")
 	cmd.Flags().StringVar(&opts.ServiceName, "service", "", "systemd service name to check uptime for (defaults to host uptime)")
+	cmd.Flags().StringVar(&opts.KubeContext, "kube-context", "", "kubeconfig context for the kubernetes-status check (defaults to kubectl's current context)")
 	cmd.Flags().StringVar(&opts.DiskPath, "disk-path", "/", "mount path to check for free disk space")
 	cmd.Flags().Float64Var(&opts.DiskWarnPercent, "disk-warn", defaultDiskWarnPercent, "disk usage percent at which disk-space reports WARN")
 	cmd.Flags().Float64Var(&opts.DiskFailPercent, "disk-fail", defaultDiskFailPercent, "disk usage percent at which disk-space reports FAIL")
@@ -250,12 +251,16 @@ func newJobsCmd(openDB DatabaseOpener) *cobra.Command {
 
 	cmd.AddCommand(newJobsListCmd(openDB))
 	cmd.AddCommand(newJobsShowCmd(openDB))
+	cmd.AddCommand(newJobsPruneCmd(openDB))
 
 	return cmd
 }
 
 func newJobsListCmd(openDB DatabaseOpener) *cobra.Command {
-	var limit int
+	var (
+		limit      int
+		jsonOutput bool
+	)
 
 	cmd := &cobra.Command{
 		Use:   "list",
@@ -272,6 +277,9 @@ func newJobsListCmd(openDB DatabaseOpener) *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
+			if jsonOutput {
+				return WriteJobsJSON(out, jobs)
+			}
 			for _, j := range jobs {
 				finished := "running"
 				if j.FinishedAt != nil {
@@ -286,12 +294,15 @@ func newJobsListCmd(openDB DatabaseOpener) *cobra.Command {
 	}
 
 	cmd.Flags().IntVar(&limit, "limit", 20, "maximum number of jobs to list")
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output jobs as JSON")
 
 	return cmd
 }
 
 func newJobsShowCmd(openDB DatabaseOpener) *cobra.Command {
-	return &cobra.Command{
+	var jsonOutput bool
+
+	cmd := &cobra.Command{
 		Use:   "show [job-id]",
 		Short: "Show details for a specific health check run",
 		Args:  cobra.ExactArgs(1),
@@ -311,15 +322,101 @@ func newJobsShowCmd(openDB DatabaseOpener) *cobra.Command {
 			}
 
 			out := cmd.OutOrStdout()
+			if jsonOutput {
+				return WriteJobJSON(out, job, results)
+			}
 			if _, err := fmt.Fprintf(out, "Job %d: %s (%s)\n", job.ID, job.Status, job.Summary); err != nil {
 				return err
 			}
 			for _, r := range results {
-				if _, err := fmt.Fprintf(out, "[%s] %-17s %s\n", r.Status, r.Key, r.Message); err != nil {
+				// Rows written before SEC-009 may still hold control characters.
+				if _, err := fmt.Fprintf(out, "[%s] %-17s %s\n", r.Status, r.Key, sanitizeMessage(r.Message)); err != nil {
 					return err
 				}
 			}
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output the job and its results as JSON")
+
+	return cmd
+}
+
+func newJobsPruneCmd(openDB DatabaseOpener) *cobra.Command {
+	var (
+		olderThan string
+		dryRun    bool
+	)
+
+	cmd := &cobra.Command{
+		Use:   "prune",
+		Short: "Delete health check runs older than a given age",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if olderThan == "" {
+				return errors.New("--older-than is required, for example --older-than 30d")
+			}
+			age, err := parseAge(olderThan)
+			if err != nil {
+				return fmt.Errorf("invalid --older-than value %q: %w", olderThan, err)
+			}
+
+			db, err := openDB()
+			if err != nil {
+				return err
+			}
+			cutoff := time.Now().Add(-age)
+			n, err := PruneScanJobs(db, cutoff, dryRun)
+			if err != nil {
+				return err
+			}
+
+			verb, noun := "Deleted", "jobs"
+			if dryRun {
+				verb = "Would delete"
+			}
+			if n == 1 {
+				noun = "job"
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "%s %d %s started before %s\n", verb, n, noun, cutoff.Format(time.RFC3339))
+			return err
+		},
+	}
+
+	cmd.Flags().StringVar(&olderThan, "older-than", "", "delete runs that started longer ago than this age, such as 30d, 12h, or 90m (required)")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "report how many runs would be deleted without deleting them")
+
+	return cmd
+}
+
+// maxAgeDays keeps a day count within time.Duration's range (about 292 years).
+const maxAgeDays = math.MaxInt64 / int64(24*time.Hour)
+
+var errAgeFormat = errors.New("use a whole number of days such as 30d, or a duration such as 12h")
+
+// parseAge parses a positive age: a whole number of days such as 30d, or a Go
+// duration such as 12h or 90m.
+func parseAge(s string) (time.Duration, error) {
+	if days, ok := strings.CutSuffix(s, "d"); ok {
+		n, err := strconv.ParseInt(days, 10, 64)
+		switch {
+		case err != nil:
+			return 0, errAgeFormat
+		case n <= 0:
+			return 0, errors.New("must be greater than 0")
+		case n > maxAgeDays:
+			return 0, fmt.Errorf("must be at most %dd", maxAgeDays)
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	}
+
+	age, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, errAgeFormat
+	}
+	if age <= 0 {
+		return 0, errors.New("must be greater than 0")
+	}
+	return age, nil
 }
