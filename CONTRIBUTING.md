@@ -11,8 +11,9 @@ Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Contribution workflow
 
-1. **Open an issue first.** Create an issue to pitch an addition or change.
-   Pull requests with no corresponding issue will be declined.
+1. **Open an issue first.** Create an issue to pitch an addition or change,
+   using the "Feature or change proposal" form (or "Bug report" for a
+   defect). Pull requests with no corresponding issue will be declined.
 2. **Comment on existing issues.** If an issue for the item already exists,
    comment on it before opening a pull request that addresses it.
 3. **Wait for confirmation.** A maintainer must confirm the pitched concept on
@@ -70,7 +71,7 @@ gofmt -s -w .                      # required before every pull request
 go vet ./...
 go test ./...
 go test -race ./...                # required for concurrency-related changes
-GOOS=linux golangci-lint run ./...    # CI uses golangci-lint v2.13.2
+GOOS=linux golangci-lint run ./...    # CI: golangci-lint v2.13.2, .golangci.yml
 GOOS=darwin golangci-lint run ./...   # CI also lints on macOS
 GOOS=windows golangci-lint run ./...  # ...and on Windows
 go mod tidy && git diff --exit-code   # CI fails if go.mod/go.sum drift
@@ -139,6 +140,9 @@ Update documentation in the same pull request when your change affects it:
 See `AGENTS.md` for the full documentation rules.
 
 ## Pull request expectations
+
+The pull request template (`.github/pull_request_template.md`) covers these
+points:
 
 - Link the confirmed issue and describe what changed and why.
 - List the validation commands you ran and their results.

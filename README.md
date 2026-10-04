@@ -684,10 +684,11 @@ Run these from the repository root. Each `make` target wraps the command shown.
 `go mod tidy && git diff --exit-code`, because CI fails when `go.mod` or
 `go.sum` drift.
 
-CI runs `go vet`, golangci-lint, and the tests on Linux, macOS, and Windows,
-and smoke-tests the built binary. The Security workflow runs CodeQL, gosec, and
-govulncheck. See [CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist
-before opening a pull request.
+CI runs `go vet`, golangci-lint (with the linters pinned in `.golangci.yml`),
+and the tests on Linux, macOS, and Windows, and smoke-tests the built binary.
+The Security workflow runs CodeQL, gosec, and govulncheck. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for the full checklist before opening a
+pull request.
 
 ## Project structure
 
@@ -703,9 +704,11 @@ before opening a pull request.
 │   ├── scan-store.go     Job and result storage
 │   ├── scan-history.go   jobs diff and jobs stats
 │   └── seed.go           Built-in check catalog
-├── .github/              CI, security scanning, Docker smoke tests, releases, Dependabot
+├── .github/              CI, security scanning, Docker smoke tests, releases, Dependabot,
+│                         issue and pull request templates
 ├── Dockerfile            Multi-stage container image (runs as UID 10001)
 ├── Makefile              Development targets and release tagging
+├── .golangci.yml         Pinned golangci-lint linter set
 ├── intel/                Maintainer documents: architecture, security, plans
 ├── CONTRIBUTING.md       Contribution workflow and validation
 └── LICENSE, NOTICE       Apache-2.0 license and third-party notices

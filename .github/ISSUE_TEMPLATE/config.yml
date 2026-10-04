@@ -1,0 +1,7 @@
+# Every issue uses a form, so a maintainer can confirm a concept before a pull
+# request (CONTRIBUTING.md, "Contribution workflow").
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/jabbott-iii/Salus/blob/main/CONTRIBUTING.md#security-issues
+    about: Do not open a public issue for a vulnerability; contact the code owner privately as described here.

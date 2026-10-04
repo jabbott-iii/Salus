@@ -5,10 +5,10 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-10-04 (against `8856673`, which carries M5 and M6;
-v1.0.2 is at `08b2faa`). The M6 review of new inputs and outputs found no new
-issue; its controls are listed under "Existing controls observed". SEC-009 is
-Closed; SEC-003 and SEC-005 still wait on maintainer checks.
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and
+P3-7; v1.0.2 is at `08b2faa`). The M6 review of new inputs and outputs found
+no new issue; its controls are listed under "Existing controls observed".
+SEC-009 is Closed; SEC-003 and SEC-005 still wait on maintainer checks.
 
 ## Threat model summary
 

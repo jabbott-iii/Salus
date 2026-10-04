@@ -670,3 +670,64 @@ reconstructed from commit messages and diffs, not first-hand records.
   `intel/history.md`
 - Reason / reference: the independent review of 2026-10-04.
   - Uncommitted at the time of writing.
+
+## 2026-10-04: P3-7 committed and validated by CI
+
+- Change:
+  - The maintainer committed P3-7 and its review fixes to `main` as
+    `03964ff` (22 files), directly rather than through a pull request.
+  - GitHub Actions on `03964ff` succeeded: CI #80 (run 37235931207; ubuntu,
+    macOS, and Windows, including golangci-lint and the tests), Docker #36,
+    and Security (CodeQL and govulncheck). The live macOS sysctl and Windows
+    kernel32 tests have no skip path, so the green jobs show that they ran
+    and passed on those systems.
+  - Status updates from that evidence:
+    - `plan.md`: P3-7 is Done; the v1.1.0 release step now covers M5, M6,
+      and P3-7.
+    - "Last reviewed" lines in `plan.md`, `maint.md`, `map.md`, `notes.md`,
+      and `cybersec.md` now name `03964ff`.
+- Files: `intel/plan.md`, `intel/cybersec.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/history.md`
+- Reason / reference: P3-7 was `Awaiting merge` in `plan.md`; it is now
+  merged and validated by CI. Not verified: the job logs (reading them needs a GitHub sign-in) and the Code Scanning
+  alert state (gosec).
+  - Uncommitted at the time of writing.
+
+## 2026-10-04: Pinned golangci-lint configuration (P4-3); issue and PR templates (P4-5) (uncommitted)
+
+- Change:
+  - `.golangci.yml` (new) pins the linter set that CI has used since it
+    adopted golangci-lint v2.13.2 without a configuration file: `version:
+    "2"`, `run.tests: true`, and `linters.default: none` with errcheck,
+    govet, ineffassign, staticcheck, and unused (v2.13.2's `standard` group)
+    enabled by name. A golangci-lint upgrade can no longer change the set
+    silently; changing it now needs a recorded decision (`maint.md`
+    section 4). Lint behavior does not change.
+  - `.github/ISSUE_TEMPLATE/` (new): a bug report form, a "Feature or change
+    proposal" form for the issue-first pitch in `CONTRIBUTING.md`, and
+    `config.yml`, which turns off blank issues and points vulnerability
+    reports at `CONTRIBUTING.md`'s "Security issues" section.
+  - `.github/pull_request_template.md` (new): linked issue, what changed and
+    why, the validation commands from `CONTRIBUTING.md`, a checklist (tests,
+    documentation, public contracts, no secrets or local databases), and
+    security notes.
+  - Documentation: `maint.md` section 4 (the linter set and the
+    `health-decode.go` exception now refer to `.golangci.yml`),
+    `CONTRIBUTING.md` (the issue forms and the PR template), the README CI
+    sentence, and the `map.md` tree.
+  - The `.idea/` half of P4-5 (Q-007) was already resolved in `460a24b`.
+- Files: `.golangci.yml`, `.github/ISSUE_TEMPLATE/bug_report.yml`,
+  `.github/ISSUE_TEMPLATE/feature_request.yml`,
+  `.github/ISSUE_TEMPLATE/config.yml`, `.github/pull_request_template.md`,
+  `CONTRIBUTING.md`, `README.md`, `intel/maint.md`, `intel/map.md`,
+  `intel/plan.md`, `intel/history.md`
+- Reason / reference: `plan.md` P4-3 and P4-5.
+  - `.golangci.yml` validates against the v2.13.2 JSON schema; golangci-lint
+    v2.5.0 accepts it, enables exactly the five linters with it (the same
+    five it enables without a file), and rejects a misspelled linter name.
+    The first lint run with the file against this module is in CI.
+  - The three issue template files validate against the SchemaStore
+    issue-form and issue-config schemas; two deliberately broken copies were
+    rejected.
+  - No Go code changed.
+  - Uncommitted at the time of writing.

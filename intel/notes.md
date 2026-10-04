@@ -3,8 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-10-04 (against `8856673`, which carries M5 and M6;
-v1.0.2 is at `08b2faa`).
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and
+P3-7; v1.0.2 is at `08b2faa`).
 
 ## Engineering notes
 
@@ -180,7 +180,9 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   - None of this ran on a real Mac or Windows machine before commit; the
     CI jobs on `macos-latest` and `windows-latest` run
     `TestResourceChecksReadThisHost`, `TestDarwinSysctlsReadable`, and
-    `TestWindowsKernel32Readable` against the real system calls.
+    `TestWindowsKernel32Readable` against the real system calls. They passed
+    in CI #80 on `03964ff` (2026-10-04). Those tests have no skip path, so a
+    green run means they ran.
 - **Windows false positive in `misconfig`.** On Windows, Go's `FileMode`
   reports `0666` for any file without the read-only attribute
   (`os/types_windows.go`), so the "writable by group/other" test fires for

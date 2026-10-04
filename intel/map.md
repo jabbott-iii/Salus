@@ -3,8 +3,7 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-10-04 (against `8856673`, which carries M6, P6-1 to
-P6-12).
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7).
 
 ## Directory structure
 
@@ -70,6 +69,9 @@ Salus/
 │   └── scan-history_test.go
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
 ├── .github/dependabot.yml      Weekly updates: gomod, github-actions (codeql-action + artifact-actions groups), docker
+├── .github/ISSUE_TEMPLATE/     Issue forms (P4-5): bug_report.yml, feature_request.yml (issue-first pitch),
+│                               config.yml (no blank issues; security reports go to CONTRIBUTING.md)
+├── .github/pull_request_template.md   Linked issue, validation commands, checklist, security notes
 ├── .github/workflows/
 │   ├── ci.yml                  vet, lint, test+coverage, native build smoke (3 OSes)
 │   ├── security.yml            CodeQL + gosec (SARIF, non-blocking) + govulncheck (blocking)
@@ -81,6 +83,7 @@ Salus/
 ├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001
 ├── .dockerignore               Keeps .git, .env, *.db, IDE/CI files out of the build context
 ├── Makefile                    Dev targets (build, test, vet, lint, fmt, cover) + release tagging
+├── .golangci.yml               golangci-lint v2 config: pinned linter set (P4-3), tests analyzed
 ├── AGENTS.md                   Agent/contributor operating rules
 ├── README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
 ├── LICENSE (Apache-2.0), NOTICE, CODEOWNERS

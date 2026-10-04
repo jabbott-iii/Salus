@@ -7,8 +7,7 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-10-04 (against `8856673`, which carries M6, P6-1 to
-P6-12).
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7).
 
 ## 1. Purpose and scope
 
@@ -251,8 +250,11 @@ authorization plus README and `history.md` updates:
 ### Source files
 - Every Go source file carries the Apache-2.0 license header used throughout
   the repository. Build-constraint lines (`//go:build ...`) go above it.
-- Format with `gofmt -s -w .`. CI runs `go vet` and `golangci-lint` (v2.13.2,
-  default linter set; there is no `.golangci.yml`).
+- Format with `gofmt -s -w .`. CI runs `go vet` and `golangci-lint` (v2.13.2)
+  with `.golangci.yml` (P4-3), which pins the linter set to errcheck, govet,
+  ineffassign, staticcheck, and unused (v2.13.2's `standard` group, listed
+  explicitly) and keeps `run.tests: true`. Change the set only with a
+  recorded decision in `plan.md` or `notes.md`.
 - Existing file names use hyphens (`logic-cli.go`, `scan-store.go`). Keep the
   existing names; do not rename files without an explicit request.
 
@@ -318,11 +320,11 @@ authorization plus README and `history.md` updates:
   `health-resources.go` (`linux || darwin || windows`). Pure decoding of
   platform data (sysctl structs, Windows CPU counters) is in
   `health-decode.go`, which has no build constraint so that its tests run on
-  every platform; golangci-lint includes test files by default, so `unused`
-  does not report those functions on platforms whose checks do not call
-  them. Checks that need systemd tools (`systemd-failed`,
-  `time-sync`) instead test `runtime.GOOS` at run time, like
-  `service-uptime`, and report WARN off Linux.
+  every platform; golangci-lint analyzes test files (`run.tests: true` in
+  `.golangci.yml`), so `unused` does not report those functions on platforms
+  whose checks do not call them. Checks that need systemd tools
+  (`systemd-failed`, `time-sync`) instead test `runtime.GOOS` at run time,
+  like `service-uptime`, and report WARN off Linux.
 - Files that checks read on the user's behalf (`--cert`, sshd_config and its
   includes) are opened read-only, only if they are regular files (a FIFO would
   block), and never echoed: messages carry only metadata (paths, subject
@@ -345,8 +347,8 @@ authorization plus README and `history.md` updates:
   on the other operating systems (this broke the macOS CI job on
   2026-09-27). Lint for all three targets (see section 6). The one exception
   is `health-decode.go` (see the platform-specific logic rule above), whose
-  functions every platform's tests use; it depends on golangci-lint's
-  default `run.tests: true`, so keep that default.
+  functions every platform's tests use; it depends on `run.tests: true`,
+  which `.golangci.yml` sets explicitly.
 
 ### Adding a new check (checklist)
 1. Add a `key...` constant and append it to the end of `AllCheckKeys` in
