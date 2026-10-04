@@ -31,6 +31,10 @@ func checkDiskSpace(opts CheckOptions) CheckOutcome {
 	return CheckOutcome{Key: keyDiskSpace, Status: StatusWarn, Message: "disk space check is only supported on Linux"}
 }
 
+func checkDiskInodes(opts CheckOptions) CheckOutcome {
+	return CheckOutcome{Key: keyDiskInodes, Status: StatusWarn, Message: "inode usage check is only supported on Linux"}
+}
+
 func checkMemory(opts CheckOptions) CheckOutcome {
 	return CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory check is only supported on Linux"}
 }

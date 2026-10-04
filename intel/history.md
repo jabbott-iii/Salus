@@ -518,3 +518,65 @@ reconstructed from commit messages and diffs, not first-hand records.
   change in `AGENTS.md` in the same working tree was made by the maintainer,
   not by this work.
   - Uncommitted at the time of writing.
+
+## 2026-10-03: M6 — per-target results, monitoring outputs, new checks, run history (uncommitted)
+
+- Change:
+  - Per-target results (P6-1): `CheckOutcome` and `ScanResult` gain `target`,
+    `value`, and `unit`. `RunChecks` runs `disk-space`, `disk-inodes`,
+    `service-uptime`, and `cert-expiry` once per `--disk-path`, `--service`,
+    or `--cert` value (`checkTargets`), and runs a repeated `--only` key once.
+    Resource checks report their percentage, host uptime its seconds, and the
+    count-based checks their counts. `AutoMigrate` adds the three columns to
+    existing databases. Supersedes P3-8.
+  - `check run` output and control (P6-2 to P6-4): `--format
+    text|json|nagios|prometheus|junit`, `--output` (validated before the run,
+    written atomically, symlinks rejected, mode and group of an existing file
+    kept), `--fail-on warn|fail`, and `--retain <age>` (prunes after the
+    report is written, never the current run).
+  - New checks, appended after `misconfig` in `AllCheckKeys` and run by
+    default (Q-012): `disk-inodes`, `kubernetes-pods` (with
+    `--kube-namespace`), `systemd-failed`, `time-sync`, and `cert-expiry`
+    (only with `--cert`; `--cert-warn-days`). New catalog category
+    "Certificates".
+  - `kubernetes-status` reports nodes under Memory, Disk, or PID pressure as
+    WARN (Q-014).
+  - `misconfig` rules `docker-tcp-insecure`, `sshd-root-login`, and
+    `sshd-password-auth` (effective value, Q-013), with an sshd_config
+    reader and the new `SALUS_SSHD_CONFIG` override.
+  - `jobs diff` and `jobs stats` (P6-11, P6-12). `ListScanJobs` now orders by
+    `julianday(started_at)`.
+  - Seed descriptions for `disk-space`, `docker-status`, `kubernetes-status`,
+    and `service-uptime` updated; existing databases keep their old text
+    (insert-only catalog).
+  - Documentation: README (features, use cases, flags, check and rule tables,
+    output formats, jobs commands, exit codes, configuration, "Upgrading from
+    1.0.2", containerization, structure), CONTRIBUTING (contracts, new-check
+    checklist, non-root tests), and `maint.md`, `map.md`, `cybersec.md`
+    (threat model, requirements 12 and 13, controls; no new issue),
+    `notes.md` (Q-012 to Q-014, behavior notes, expected gosec findings),
+    and `plan.md` (Phase 6).
+- Files:
+  - New: `internal/health-certs.go`, `internal/health-pods.go`,
+    `internal/health-sshd.go`, `internal/health-systemd.go`,
+    `internal/report-formats.go`, `internal/report-files_unix.go`,
+    `internal/report-files_windows.go`, `internal/scan-history.go`, and tests
+    `internal/health-certs_test.go`, `internal/health-pods_test.go`,
+    `internal/health-sshd_test.go`, `internal/health-sshd_posix_test.go`,
+    `internal/health-systemd_test.go`, `internal/report-formats_test.go`,
+    `internal/scan-history_test.go`.
+  - Changed: `internal/health.go`, `internal/health-resources_linux.go`,
+    `internal/health-resources_other.go`, `internal/health-thresholds.go`,
+    `internal/logic-cli.go`, `internal/report.go`, `internal/scan-store.go`,
+    `internal/database.go`, `internal/seed.go`, their tests,
+    `main_test.go`, `README.md`, `CONTRIBUTING.md`, and `intel/*.md` except
+    `golang.md`.
+  - Unchanged: `go.mod`, `go.sum`, `NOTICE` (standard library only),
+    workflows, `Dockerfile`, `Makefile`.
+- Reason / reference: maintainer request of 2026-10-03 to plan and implement
+  the recommended features (`plan.md` Phase 6; decisions Q-012 to Q-014).
+  - Validated locally; see "M6 validation" in `plan.md` for the commands,
+    results, and what was not run.
+  - An independent review found no high-severity defects; its medium and low
+    findings were fixed before handover (listed in `plan.md`).
+  - Uncommitted at the time of writing.

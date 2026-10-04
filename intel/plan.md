@@ -4,8 +4,10 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 and SEC-009
-changes; v1.0.2 is at `08b2faa`). Decisions on Q-001 to Q-011 are recorded in
+Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes;
+v1.0.2 is at `08b2faa`). The M5 and SEC-009 rows still say "Awaiting CI";
+CI #78, Docker #34, and Security #83 passed on `28e66d0`, which carries them,
+but those rows were not updated in this pass. Decisions on Q-001 to Q-011 are recorded in
 `notes.md`; the P3-2 and P3-3 severity decisions are in `maint.md` section 3.
 
 Status values: `Proposed` (not started), `Ready` (decision made, can start),
@@ -134,7 +136,7 @@ needs tests without host dependence (P1-8) and README updates.
 | P3-5 | Machine-readable history: `jobs list --json` and `jobs show --json`. | Additive. Does not change the `check run --json` array shape. Implemented (uncommitted). A job object has `id`, `status`, `started_at`, `finished_at`, and `summary`. `jobs show` adds `results` in the `check run --json` shape. An empty list prints `[]`. | Awaiting CI |
 | P3-6 | Job retention: a way to prune old jobs (for example `jobs prune --older-than 30d`). | Prevents unbounded DB growth under cron. Implemented (uncommitted): `jobs prune --older-than <days\|duration> [--dry-run]` and `PruneScanJobs`. One transaction deletes the results explicitly, uses a subquery, and compares times with `julianday` (see `notes.md`). | Awaiting CI |
 | P3-7 | macOS and Windows resource checks (Q-005: approved). macOS: `statfs`, sysctl (`hw.memsize`, `vm.loadavg`, `kern.boottime`, page counts). Windows: kernel32 (`GetDiskFreeSpaceExW`, `GlobalMemoryStatusEx`, `GetTickCount64`). Windows has no load average, so CPU load needs its own definition (for example utilization sampled with `GetSystemTimes`), recorded in `maint.md`. | Try the standard library `syscall` package first. Adopt `golang.org/x/sys` only if it proves insufficient, and record why. Then update `NOTICE`. Widen the `//go:build linux` constraint on `internal/health-thresholds.go` to the new platforms. Unsupported-platform stubs remain for other OSes. | Ready |
-| P3-8 | Multiple services in one run (for example a repeatable `--service`). | Output and storage use one outcome per key today. Needs a design for per-service keys. | Proposed |
+| P3-8 | Multiple services in one run (for example a repeatable `--service`). | Output and storage use one outcome per key today. Needs a design for per-service keys. Superseded 2026-10-03 by P6-1, which adds per-target outcomes and a repeatable `--service`. | Awaiting merge (P6-1) |
 
 ## Phase 4: Documentation and developer experience
 
@@ -154,6 +156,97 @@ needs tests without host dependence (P1-8) and README updates.
 |---|---|---|
 | P5-1 | Once the package grows, split `internal` into focused packages (for example `internal/checks`, `internal/store`, `internal/report`, `internal/cli`). Rename hyphenated files only as part of that move. | Proposed |
 | P5-2 | Remove the empty TUI placeholders `internal/logic-tui.go` and `internal/ui-form.go` (Q-001: CLI only). Fix the Dockerfile "TUI" comment with P4-6. Done 2026-09-28 (uncommitted): both files deleted. Each held only the license header and `package internal`. | Awaiting CI |
+
+## Phase 6: Multi-target results, monitoring outputs, and new checks (M6)
+
+Requested by the maintainer on 2026-10-03. Severity and default-run decisions
+are Q-012 to Q-014 in `notes.md`. Everything here is additive to the public
+contracts in `maint.md` section 3, except where an item says it can raise exit
+codes; those go into the README "Upgrading from 1.0.2" section, so the next
+release stays a minor version (v1.1.0, together with M5). No new Go module
+dependencies: every item uses the standard library.
+
+Design summary:
+- A check function still produces one `CheckOutcome` for one target.
+  `RunChecks` expands a targeted check into one run per target (a
+  `checkTargets` entry per key), so the existing checks and their tests keep
+  their shape.
+- `CheckOutcome` gains optional `target`, `value`, and `unit` fields (JSON
+  `omitempty`). `ScanResult` gains `Target`, `Value`, and `Unit` columns
+  (added by `AutoMigrate`; existing rows get `''` or `NULL`).
+- Text output and `jobs show` text keep their format; messages already name
+  the target.
+- New check keys are appended to `AllCheckKeys` after `misconfig`, so the
+  positions of the existing seven in `--json` output do not move.
+
+| ID | Work | Acceptance criteria | Status |
+|---|---|---|---|
+| P6-1 | Foundation: per-target outcomes. `target`, `value` (number), and `unit` (`percent`, `seconds`, `days`, `count`) on `CheckOutcome` and `ScanResult`. Repeatable `--disk-path` (string array, default `/`) and `--service` (string slice). Duplicate targets run once. Resource checks report their measured percentage; host uptime reports seconds. `jobs show` (text and `--json`) and `RecordScan` carry the new fields. | `check run --disk-path / --disk-path /tmp --service a --service b --json` yields one object per target with `target` set. A database created by v1.0.2 opens, gains the columns, and its old rows read back with an empty target. `TestCheckRunPassesFlagValuesToChecks` covers the slices. Existing JSON fields and text lines are unchanged for single-target runs. | Awaiting merge |
+| P6-2 | Output formats: `check run --format text\|json\|nagios\|prometheus\|junit`, with `--json` kept as `--format json` (conflicting values exit 3). `--output <file>` writes the report to a file atomically (temp file in the same directory, then rename; a new file is `0600`, an existing file keeps its mode). Nagios: status word from the exit code, counts on the first line, perfdata from `value`, one detail line per outcome, `\|` in messages replaced. Prometheus text format: `salus_check_status` (0/1/2), `salus_check_value` (with a `unit` label), `salus_check_duration_seconds`, and `salus_last_run_timestamp_seconds`, with label escaping. JUnit XML via `encoding/xml`: FAIL is a `<failure>`, WARN is a `<failure>` unless `--fail-on fail`. | Golden-output tests for each format, including escaping of quotes, backslashes, newlines in labels, `\|` in Nagios messages, and XML special characters. `--output` leaves no temp file on success or on a write error, and replaces an existing file without changing its mode. `--quiet` still suppresses stdout but not `--output`. | Awaiting merge |
+| P6-3 | `check run --fail-on warn\|fail` (default `warn`, today's behavior). With `fail`, a WARN-only run exits 0; FAIL still exits 2; operational errors still exit 3. | Exit-code table tests for both values; an invalid value exits 3 before the database opens. | Awaiting merge |
+| P6-4 | `check run --retain <age>` prunes recorded runs older than the age (same syntax as `jobs prune --older-than`) after recording the current run, in the same invocation. Never prunes the current run. Rejected with `--no-save` (exit 3). | Tests: old jobs removed, current job kept even with a tiny age, invalid age and `--no-save` combination exit 3 before the database opens. | Awaiting merge |
+| P6-5 | `disk-inodes` check: inode usage per `--disk-path` from `statfs` (`Files`, `Ffree`), with `--inode-warn`/`--inode-fail` (80/90, validated like the disk thresholds). A filesystem that reports no inode count (for example btrfs) is PASS with a note. Linux only; other platforms WARN like the other resource checks. | Unit tests for the percentage and the no-inodes case through a `statfs` seam; threshold validation cases; runs by default (Q-012). | Awaiting merge |
+| P6-6 | `systemd-failed` check: `systemctl list-units --state=failed --plain --no-legend --no-pager`; WARN naming the failed units (up to five), PASS when none. WARN when systemctl is missing, when systemd is not running, or on other errors (failed units unknown). Value: failed unit count. | Fake-runner tests for none, some, many (name list cap), systemd not booted, and other errors; output lines that are not unit rows are ignored. | Awaiting merge |
+| P6-7 | `time-sync` check: `timedatectl show -p NTP -p NTPSynchronized`; PASS when synchronized, WARN when not (naming whether NTP is disabled), WARN when timedatectl is missing or fails. | Fake-runner tests for yes/no, NTP disabled, older systemd without `show`, and systemd not running. | Awaiting merge |
+| P6-8 | `cert-expiry` check: repeatable `--cert <file>` (PEM bundle or a single DER certificate, read up to 1 MiB). Reports the certificate in the file that expires first: FAIL if expired or not yet valid, WARN within `--cert-warn-days` (default 30), PASS otherwise. Value: days until expiry. FAIL for an unreadable file or one without a certificate. File contents are never printed. Skipped in a default run without `--cert`; `--only cert-expiry` without `--cert` exits 3. | Tests with generated certificates (valid, expiring, expired, not yet valid, mixed bundle, DER, private key only, oversized file, missing file). | Awaiting merge |
+| P6-9 | Kubernetes depth. (a) `kubernetes-status` also reports nodes with `MemoryPressure`, `DiskPressure`, or `PIDPressure` as WARN (Q-014), appended to the existing message. (b) New `kubernetes-pods` check: `kubectl get pods` in `--kube-namespace` (default: the context's namespace; validated as a DNS-1123 label and passed as one `--namespace=<ns>` argument). WARN for pods in CrashLoopBackOff, Failed, or not Ready (Q-014); completed pods are ignored; Forbidden is PASS with a note, like the node listing; other errors WARN (pod health unknown). Value: problem pod count. Shares `--kube-context`. | Fake-runner tests for each state, the namespace argument, invalid namespaces, Forbidden, and kubectl log lines in the output. Existing `kubernetes-status` messages are unchanged when no node reports pressure. | Awaiting merge |
+| P6-10 | `misconfig` rules with new stable ids: `docker-tcp-insecure` (`DOCKER_HOST` uses `tcp://` and `DOCKER_TLS_VERIFY` is empty), `sshd-root-login` (effective `PermitRootLogin yes`), and `sshd-password-auth` (effective `PasswordAuthentication yes`, including the unset default, Q-013). The sshd rules read `sshd_config` (override: new `SALUS_SSHD_CONFIG`), follow `Include` (globs, relative to the config directory, depth 16), use first-value-wins, and stop at the first `Match`. They report nothing when any needed file or directory is missing or unreadable. | Tests for each rule, `=` and quoted syntax, case-insensitive keywords, includes (including an unreadable include and include cycles), and `Match`. `isolateMisconfigEnv` and `isolateHostEnv` point `SALUS_SSHD_CONFIG` at a missing file. Rule order is documented. | Awaiting merge |
+| P6-11 | `jobs diff [from] [to]`: compares two recorded runs by (key, target); with no ids, the two most recent; with one id, that run and the most recent. Lists status changes (marked worse or better), checks only in one run, and an unchanged count. `--json`. `--exit-code` exits 1 when anything changed (like `git diff --exit-code`). Fewer than two runs exits 3. | Tests for each change kind, id handling, JSON shape, `--exit-code`, and old rows without a target. | Awaiting merge |
+| P6-12 | `jobs stats [--since <age>]` (default 7d): per (key, target) run, PASS, WARN, and FAIL counts, status changes, last status, and a flapping flag when changes reach `--flap-threshold` (default 3). Text table (`text/tabwriter`) and `--json`. | Tests for counts, change counting in run order, the threshold, the `--since` cutoff (using `julianday`, like prune), and an empty window. | Awaiting merge |
+
+### M6 validation (2026-10-03, uncommitted working tree)
+
+Run in a cloud workspace with Go 1.26.8 built from source and the modules
+resolved from their upstream GitHub repositories at the `go.mod` versions,
+through a throwaway module file (`go.mod` and `go.sum` are unchanged; module
+content was not checked against `go.sum`). The CI workflows were not run.
+
+| Check | Result |
+|---|---|
+| `gofmt -s -l .`, `go vet ./...` (linux, darwin, windows) | Clean / pass |
+| `go test ./...`, `go test -race ./...` | Pass. Coverage: root package 79.4%, `internal` 92.7% (90.3% before M6) |
+| Tests as an unprivileged user (`nobody`) | Pass, including the unreadable-include and unlistable-directory cases, which skip as root |
+| Test binaries compiled for darwin and windows | Pass |
+| staticcheck 2026.2.1 (`U1000`, `SA*`, `S1*`) for linux, darwin, windows | No findings; `U1000` stands in for golangci-lint's `unused` |
+| Mutation check: ordering by `started_at` text instead of `julianday` | Caught by `TestHistoryOrdersRunsByInstantAcrossUTCOffsets` |
+| Built binary: default run, `--disk-path` twice, nagios, prometheus `--output` (mode `0600`), junit with a generated certificate and key in one file, symlinked `--output` (exit 3 before running), `jobs diff`, `jobs stats`, `check list` | Behaved as documented; the private key never appeared in output |
+
+Not run: golangci-lint itself (no build for Go 1.26.8 was available; errcheck
+was reviewed by hand), gosec, CodeQL, govulncheck, the Docker image build, and
+macOS and Windows test execution.
+
+An independent review (a separate agent that had not seen the work) found no
+high-severity defects and these, all fixed before handover:
+- sshd `Match all` resumes global settings (was ignored);
+- a relocated `SALUS_SSHD_CONFIG` read absolute `/etc/ssh/` includes from the
+  running system (now rebased; other absolute includes keep the rules
+  silent);
+- `jobs stats` and the default `jobs diff` pair ordered runs by timestamp
+  text, wrong across UTC offset changes (now `julianday`, also in
+  `ListScanJobs`);
+- a `--retain` prune failure discarded the report (prune now runs after the
+  report is written);
+- `--output` problems surfaced only after the checks ran (now checked first),
+  and a symlinked target was silently replaced (now rejected; the existing
+  group is kept where permitted);
+- certificate days saturated for far-future dates (now computed from Unix
+  seconds);
+- glob dotfiles and single-quoted values in sshd_config, FIFOs as `--cert` or
+  include files, duplicate `--only` keys (duplicate Prometheus series), the
+  first `jobs diff`/`jobs stats` after the upgrade (rows without targets are
+  now matched by `legacyMatch`), `jobs diff <latest-id>` comparing a run with
+  itself, the migration test not reproducing a real v1.0.2 table, and several
+  documentation mismatches.
+
+Next, for the maintainer: review and commit the working tree, let CI run on
+all three operating systems, triage the expected gosec findings (see
+`notes.md`), then release M5 and M6 together as v1.1.0, after a manual CD run
+on `main` (P2-8 was closed without one).
+
+Not in scope for M6 (recommended earlier, needs a decision first): a config
+file, custom command checks, and notifications. Not planned: an HTTP endpoint
+(Q-001: CLI only) and client-go. CI smoke steps keep their shell exit-code
+logic; switching them to `--fail-on` is optional follow-up and changes CI.
 
 ## Recommended sequence
 
@@ -220,3 +313,9 @@ needs tests without host dependence (P1-8) and README updates.
    - Next: commit, let CI run on all three operating systems, and release.
      Then P3-7 (macOS and Windows resource checks), which is Ready, and P3-8,
      which needs a design for per-service keys.
+   - *Update 2026-10-03:* the M5 commit (`28e66d0`) passed CI #78, Docker #34,
+     and Security #83. P3-8 is delivered by M6 (P6-1).
+6. **M6, multi-target results, monitoring outputs, and new checks:** P6-1 to
+   P6-12, implemented 2026-10-03 in the working tree (uncommitted) and
+   validated locally (see "M6 validation"). Release together with M5 as
+   v1.1.0; the README "Upgrading from 1.0.2" section covers both.

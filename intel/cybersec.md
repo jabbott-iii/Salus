@@ -5,33 +5,43 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 and SEC-009
-changes; v1.0.2 is at `08b2faa`).
+Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes;
+v1.0.2 is at `08b2faa`). The M6 review of new inputs and outputs found no new
+issue; its controls are listed under "Existing controls observed".
 
 ## Threat model summary
 
-- **Deployment:** Local CLI run by an operator, a cron job, or a CI step; also
+- **Deployment:** Local CLI run by an operator, a cron job, a CI step, or a
+  monitoring agent (Nagios-style plugin, Prometheus textfile collector); also
   shipped as a container image. No network listener and no HTTP API.
 - **Trust boundaries:**
-  - Command-line flags: `--service`, `--kube-context`, `--disk-path`,
-    `--only`, the thresholds, and `jobs prune --older-than`.
-  - Environment variables: `SALUS_DB_PATH`, `KUBECONFIG`, `DOCKER_HOST`,
-    `PATH`, and `HOME`.
-  - Output of external tools (`docker`, `kubectl`, `systemctl`), which a
-    hostile daemon or API server can control (SEC-009).
-  - The SQLite file on disk.
+  - Command-line flags: `--service`, `--kube-context`, `--kube-namespace`,
+    `--disk-path`, `--cert`, `--output`, `--only`, the thresholds, and the
+    ages of `jobs prune --older-than`, `jobs stats --since`, and
+    `check run --retain`.
+  - Environment variables: `SALUS_DB_PATH`, `SALUS_SSHD_CONFIG`,
+    `KUBECONFIG`, `DOCKER_HOST`, `DOCKER_TLS_VERIFY`, `PATH`, and `HOME`.
+  - Output of external tools (`docker`, `kubectl`, `systemctl`,
+    `timedatectl`), which a hostile daemon or API server can control
+    (SEC-009).
+  - Files read on the user's behalf: `--cert` files (which may also hold a
+    private key) and `sshd_config` with its includes.
+  - The SQLite file on disk, and the `--output` report file.
   - The CI/CD supply chain: actions, base images, Go modules, and release
     artifacts.
 - **Data handled:** Host health metadata:
   - mount paths, service names, and the Docker server version;
-  - container and node names;
+  - container, node, pod, and systemd unit names;
+  - certificate subject names and validity dates;
   - kubeconfig, socket, and `PATH` directory paths;
   - the first line of external tool errors, which can include cluster
     endpoints or host names;
   - timestamps.
 
   Salus reads only the permission bits of kubeconfig files, never their
-  contents. No credentials are read or stored by Salus itself.
+  contents. A `--cert` file may contain a private key; Salus parses only its
+  certificate blocks and prints only certificate metadata. No credentials are
+  stored by Salus itself.
 
 ## Security requirements
 
@@ -58,6 +68,13 @@ changes; v1.0.2 is at `08b2faa`).
 11. Treat external tool output as untrusted. Parse it against the expected
     format, and neutralize control characters before a message is printed or
     stored (`sanitizeMessage`, SEC-009).
+12. Read files on the user's behalf read-only, with a size bound where the
+    format allows one, and never copy their contents into messages or
+    reports; report metadata only.
+13. Escape every value placed in a structured report format for that format
+    (Prometheus label escaping, `encoding/xml` for JUnit, quoting and
+    separator replacement for Nagios), so a target or message cannot forge
+    another line, label, or element.
 
 ## Existing controls observed
 
@@ -69,11 +86,43 @@ changes; v1.0.2 is at `08b2faa`).
     characters, valid UTF-8 of at most 253 bytes. It is passed as the single
     argument `--context=<name>`.
 
+  - `--kube-namespace` must pass `validNamespace` (an RFC 1123 label, at most
+    63 bytes) and is passed as the single argument `--namespace=<name>` (M6).
+
   Invalid values fail the check without running the tool.
+- M6 inputs and outputs (2026-10-03):
+  - `RunChecks` sanitizes targets as well as messages, and stored targets are
+    sanitized again when `jobs show`, `jobs diff`, and `jobs stats` print
+    them (`resultOutcome`).
+  - `--cert` files are opened read-only and read up to 1 MiB
+    (`maxCertFileSize`); non-certificate PEM blocks, such as private keys, are
+    skipped, and messages carry only the path, subject name, and dates
+    (tested with a key in the same file).
+  - The sshd rules read `sshd_config` and its includes read-only, limit
+    include depth to 16 (as OpenSSH does, which also stops include cycles),
+    and report nothing when any needed file or directory cannot be read.
+  - `docker-tcp-insecure` reports only the host and port from `DOCKER_HOST`,
+    never user information or a path (tested with credentials in the URL).
+  - Report formats escape their values (requirement 13): Prometheus label
+    values escape `\`, `"`, and newlines and never include messages; JUnit
+    uses `encoding/xml`; Nagios labels double `'` and replace `=` and `|`, and
+    `|` in messages is replaced. Golden tests cover each case.
+  - `--output` writes through `os.CreateTemp` (random name, `O_EXCL`, `0600`)
+    in the target directory and renames over the target, so it never writes
+    through a symlink or leaves a partial file; a target that is a symbolic
+    link or any other non-regular file is rejected before any check runs. A
+    new report file is `0600` (requirement 5); an existing file keeps its
+    permission bits and, where permitted, its group.
+  - `--cert` files, sshd_config, and its includes are opened only if they are
+    regular files, so a FIFO cannot block a scheduled run.
+  - New SQL (`jobs stats`) uses `?` placeholders and a subquery, like
+    `jobs prune`.
 - `jobs prune` deletes through parameterized GORM queries (requirement 3).
 - The `misconfig` check reports insecure host settings: group- or
   other-accessible database and kubeconfig files, a Docker socket writable by
-  all users, and `PATH` directories writable by all users.
+  all users, `PATH` directories writable by all users, and (M6) a Docker TCP
+  endpoint without TLS verification and an SSH server that permits root login
+  or password authentication.
 - Data access goes through GORM with struct conditions or string conditions
   with `?` placeholders (`jobs prune` uses `julianday(started_at) <
   julianday(?)`). No SQL is built from input.

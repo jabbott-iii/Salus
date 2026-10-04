@@ -38,16 +38,22 @@ var defaultCategories = []defaultCategory{
 	{Name: "Orchestration", Description: "Kubernetes cluster reachability and status."},
 	{Name: "Services", Description: "Uptime of managed services or the host process."},
 	{Name: "Configuration", Description: "Common environment misconfigurations."},
+	{Name: "Certificates", Description: "Validity of TLS certificate files."},
 }
 
 var defaultFeatures = []defaultFeature{
-	{Category: "System Resources", Key: keyDiskSpace, Name: "Disk Space", Description: "Verifies free disk space on the configured mount point."},
+	{Category: "System Resources", Key: keyDiskSpace, Name: "Disk Space", Description: "Verifies free disk space on the configured mount points."},
 	{Category: "System Resources", Key: keyMemory, Name: "Memory", Description: "Verifies available memory and swap usage."},
 	{Category: "System Resources", Key: keyCPULoad, Name: "CPU Load", Description: "Verifies the system load average relative to available CPUs."},
-	{Category: "Container Runtime", Key: keyDocker, Name: "Docker Status", Description: "Verifies the Docker daemon is reachable."},
-	{Category: "Orchestration", Key: keyKubernetes, Name: "Kubernetes Status", Description: "Verifies the configured Kubernetes cluster is reachable."},
-	{Category: "Services", Key: keyServiceUptime, Name: "Service Uptime", Description: "Verifies a systemd service (or the host) is up and running."},
+	{Category: "Container Runtime", Key: keyDocker, Name: "Docker Status", Description: "Verifies the Docker daemon is reachable and no container is unhealthy or restarting."},
+	{Category: "Orchestration", Key: keyKubernetes, Name: "Kubernetes Status", Description: "Verifies the Kubernetes cluster is reachable and its nodes are Ready without resource pressure."},
+	{Category: "Services", Key: keyServiceUptime, Name: "Service Uptime", Description: "Verifies systemd services (or the host) are up and running."},
 	{Category: "Configuration", Key: keyMisconfig, Name: "Misconfiguration", Description: "Scans for common environment misconfigurations."},
+	{Category: "System Resources", Key: keyDiskInodes, Name: "Disk Inodes", Description: "Verifies free inodes on the configured mount points."},
+	{Category: "Orchestration", Key: keyKubePods, Name: "Kubernetes Pods", Description: "Verifies pods in a namespace are Ready and not crash-looping."},
+	{Category: "Services", Key: keySystemdFailed, Name: "Failed Units", Description: "Verifies no systemd unit is in the failed state."},
+	{Category: "Services", Key: keyTimeSync, Name: "Time Sync", Description: "Verifies the system clock is synchronized."},
+	{Category: "Certificates", Key: keyCertExpiry, Name: "Certificate Expiry", Description: "Verifies certificate files are valid and not close to expiry."},
 }
 
 // EnsureDefaultFeatures seeds the built-in feature catalog if it is not already present.

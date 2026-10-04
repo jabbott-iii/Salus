@@ -94,9 +94,11 @@ request.
 - **Scope.** Keep changes narrowly scoped. Avoid unrelated refactoring,
   formatting churn, renames, or dependency upgrades.
 - **Compatibility.** Command names, flags and their defaults, exit codes (`0`
-  PASS, `1` WARN, `2` FAIL, `3` operational error), check keys, JSON output
-  fields, `SALUS_DB_PATH`, and the database schema are public contracts. Do
-  not change them without explicit approval on the issue.
+  PASS, `1` WARN, `2` FAIL, `3` operational error), check keys and their
+  order, `misconfig` rule identifiers, JSON output fields, the Nagios,
+  Prometheus, and JUnit output layouts (including metric names and labels),
+  `SALUS_DB_PATH`, `SALUS_SSHD_CONFIG`, and the database schema are public
+  contracts. Do not change them without explicit approval on the issue.
 - **Errors.** Wrap errors with context (`fmt.Errorf("...: %w", err)`), and
   check and return every write to a command's output writer.
 - **External commands.** Use `exec.CommandContext` with a timeout and separate
@@ -106,7 +108,9 @@ request.
   graph changes.
 - **New checks** follow the checklist in
   [`intel/maint.md`](intel/maint.md#adding-a-new-check-checklist): key
-  constant, registry entry, seeded catalog entry, tests, and documentation.
+  constant appended to `AllCheckKeys`, registry entry (plus a `checkTargets`
+  entry if it runs once per target), seeded catalog entry, tests, and
+  documentation.
 
 ## Tests
 
@@ -117,6 +121,8 @@ request.
   injected fakes instead.
 - Use `t.TempDir()` for files and databases (see `newTestDatabase` in
   `internal/database_test.go`) and `t.Cleanup()` for teardown.
+- Run the tests as a normal user, not root: tests that make files unreadable
+  skip themselves under root.
 
 ## Documentation
 

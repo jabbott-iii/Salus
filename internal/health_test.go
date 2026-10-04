@@ -20,6 +20,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -48,22 +50,124 @@ func TestThresholdStatus(t *testing.T) {
 }
 
 func TestRunChecksDefaultsToAllChecks(t *testing.T) {
-	// No external tools are "installed", so docker/kubectl are never executed.
+	// No external tools are "installed", so docker/kubectl/systemctl/timedatectl
+	// are never executed. Without --cert, cert-expiry is skipped.
 	opts, calls := fakeToolOptions(t, nil, nil)
 	outcomes, err := RunChecks(nil, opts)
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
-	if len(outcomes) != len(AllCheckKeys) {
-		t.Fatalf("RunChecks() returned %d outcomes, want %d", len(outcomes), len(AllCheckKeys))
-	}
-	for i, outcome := range outcomes {
-		if outcome.Key != AllCheckKeys[i] {
-			t.Errorf("outcomes[%d].Key = %q, want %q", i, outcome.Key, AllCheckKeys[i])
-		}
+	want := slices.DeleteFunc(slices.Clone(AllCheckKeys), func(key string) bool { return key == keyCertExpiry })
+	if got := outcomeKeys(outcomes); !slices.Equal(got, want) {
+		t.Errorf("RunChecks() keys = %q, want %q", got, want)
 	}
 	if len(*calls) != 0 {
 		t.Errorf("RunChecks() executed external commands %q, want none", *calls)
+	}
+}
+
+func outcomeKeys(outcomes []CheckOutcome) []string {
+	keys := make([]string, 0, len(outcomes))
+	for _, o := range outcomes {
+		keys = append(keys, o.Key)
+	}
+	return keys
+}
+
+func TestAllCheckKeysKeepExistingPositions(t *testing.T) {
+	// Scripts may index check run --json by position; checks added later go
+	// at the end.
+	v102 := []string{"disk-space", "memory", "cpu-load", "docker-status", "kubernetes-status", "service-uptime", "misconfig"}
+	if !slices.Equal(AllCheckKeys[:len(v102)], v102) {
+		t.Errorf("AllCheckKeys starts with %q, want %q", AllCheckKeys[:len(v102)], v102)
+	}
+	for _, key := range AllCheckKeys {
+		if _, ok := checkRegistry[key]; !ok {
+			t.Errorf("check %q has no registry entry", key)
+		}
+	}
+	if len(checkRegistry) != len(AllCheckKeys) {
+		t.Errorf("checkRegistry has %d entries, AllCheckKeys %d", len(checkRegistry), len(AllCheckKeys))
+	}
+}
+
+func TestRunChecksRunsTargetedChecksPerTarget(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("service checks need systemd (Linux only)")
+	}
+	isolateMisconfigEnv(t)
+	opts, _ := fakeToolOptions(t, []string{"systemctl"}, map[string]fakeResult{
+		"systemctl is-active -- nginx": {out: "active\n"},
+		"systemctl is-active -- sshd":  {out: "inactive\n", err: errors.New("exit status 3")},
+	})
+	opts.ServiceNames = []string{"nginx", "sshd", "nginx"}
+
+	outcomes, err := RunChecks([]string{keyServiceUptime, keyMisconfig}, opts)
+	if err != nil {
+		t.Fatalf("RunChecks() error = %v", err)
+	}
+	type row struct {
+		key, target string
+		status      CheckStatus
+	}
+	var got []row
+	for _, o := range outcomes {
+		got = append(got, row{o.Key, o.Target, o.Status})
+	}
+	want := []row{
+		{keyServiceUptime, "nginx", StatusPass},
+		{keyServiceUptime, "sshd", StatusFail},
+		{keyMisconfig, "", StatusPass},
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("outcomes = %+v, want %+v (duplicate targets run once)", got, want)
+	}
+}
+
+func TestRunChecksRunsRepeatedKeysOnce(t *testing.T) {
+	isolateMisconfigEnv(t)
+	outcomes, err := RunChecks([]string{keyMisconfig, keyTimeSync, keyMisconfig}, CheckOptions{})
+	if err != nil {
+		t.Fatalf("RunChecks() error = %v", err)
+	}
+	if got := outcomeKeys(outcomes); !slices.Equal(got, []string{keyMisconfig, keyTimeSync}) {
+		t.Errorf("keys = %q, want each check once, in first-seen order", got)
+	}
+}
+
+func TestCheckTargets(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		opts CheckOptions
+		want []string
+	}{
+		{"disk default", keyDiskSpace, CheckOptions{}, []string{"/"}},
+		{"disk single field", keyDiskInodes, CheckOptions{DiskPath: "/data"}, []string{"/data"}},
+		{"disk list wins", keyDiskSpace, CheckOptions{DiskPath: "/data", DiskPaths: []string{"/", "/var", "/"}}, []string{"/", "/var"}},
+		{"host uptime", keyServiceUptime, CheckOptions{}, []string{""}},
+		{"services", keyServiceUptime, CheckOptions{ServiceNames: []string{"a", "b"}}, []string{"a", "b"}},
+		{"no certificates", keyCertExpiry, CheckOptions{}, nil},
+		{"certificate field", keyCertExpiry, CheckOptions{CertPath: "a.pem"}, []string{"a.pem"}},
+		{"certificates", keyCertExpiry, CheckOptions{CertPaths: []string{"a.pem", "b.pem", "a.pem"}}, []string{"a.pem", "b.pem"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := checkTargets[tt.key].targets(tt.opts); !slices.Equal(got, tt.want) {
+				t.Errorf("targets = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRunChecksSanitizesTargets(t *testing.T) {
+	isolateMisconfigEnv(t)
+	outcomes, err := RunChecks([]string{keyCertExpiry}, CheckOptions{CertPaths: []string{"bad\x1b[2Jname.pem"}})
+	if err != nil {
+		t.Fatalf("RunChecks() error = %v", err)
+	}
+	if len(outcomes) != 1 || outcomes[0].Target != "bad?[2Jname.pem" || strings.ContainsRune(outcomes[0].Message, '\x1b') {
+		t.Errorf("outcomes = %+v, want the escape character replaced in target and message", outcomes)
 	}
 }
 

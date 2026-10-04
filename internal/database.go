@@ -159,14 +159,20 @@ type ScanJob struct {
 }
 
 // ScanResult records the outcome of one health check within a ScanJob.
+// Target, Value, and Unit were added in v1.1.0; AutoMigrate adds them to
+// older databases, where existing rows get an empty target and unit and no
+// value.
 type ScanResult struct {
 	ID         uint `gorm:"primaryKey"`
 	ScanJobID  uint `gorm:"not null;index"`
 	FeatureID  uint `gorm:"not null;index"`
 	Feature    Feature
 	Key        string `gorm:"not null"`
+	Target     string `gorm:"not null;default:''"`
 	Status     string `gorm:"not null"` // "PASS", "WARN", or "FAIL"
 	Message    string
+	Value      *float64
+	Unit       string `gorm:"not null;default:''"`
 	DurationMs int64
 	CreatedAt  time.Time
 }

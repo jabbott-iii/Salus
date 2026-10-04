@@ -3,8 +3,8 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 and SEC-009
-changes; v1.0.2 is at `08b2faa`).
+Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes;
+v1.0.2 is at `08b2faa`).
 
 ## Engineering notes
 
@@ -97,6 +97,15 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
 
     Following Q-009, they are triaged (dismissed as false positives) in Code
     Scanning, not suppressed in code.
+  - *Update 2026-10-03 (M6, gosec not run):* expect new G304 findings (file
+    path from a variable) for `os.Open` in `readCertificates`
+    (`health-certs.go`) and `sshdParser.parseFile` (`health-sshd.go`), and
+    possibly G302 for `tmp.Chmod(mode)` in `writeFileAtomic`. The paths are
+    the invoking user's own `--cert` values, `SALUS_SSHD_CONFIG` or the
+    standard sshd location and its `Include` files, and `--output`; files are
+    opened read-only (or created with `os.CreateTemp`), and the mode is
+    `0600` or the existing file's own. Triage them in Code Scanning like the
+    G703 findings.
 - **Container image (P2-3, 2026-09-27).**
   - `golang:1.26-alpine` had moved to Alpine 3.24 while the runtime stage was
     `alpine:3.22`, so the binary was linked against a newer musl than it ran
@@ -194,14 +203,57 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   - `syntheticModes` reads `/proc/self/mounts`, and the permission rules skip
     such paths. It is not verified on a WSL host; the tests use mount
     fixtures.
+- **Per-target results (M6, P6-1).** A targeted check still examines one
+  thing per call; `RunChecks` expands it. Text output and `jobs show` text
+  print only the key, so messages of targeted checks must name their target
+  (they already did: `/var: …`, `service "nginx" …`, `<cert path>: …`).
+  Nagios detail lines and `jobs diff` follow the text report; only Nagios
+  performance-data labels and JUnit test names add the target, because they
+  must be unique. `--disk-path` and `--cert` are string arrays, because paths
+  may contain commas; `--service` is a string slice, because unit names cannot.
+- **`--output` and node_exporter (M6, P6-2).** The temporary file is
+  `.<name>.<random>.tmp` in the target directory, which the textfile
+  collector ignores (it reads `*.prom`), and the rename is atomic within one
+  filesystem. A new file is `0600`, which node_exporter (usually its own user)
+  cannot read; the README tells operators to create the file once with the
+  mode they need, which later writes keep. `os.Stat` follows a symlink at the
+  target for the mode, and the rename replaces the symlink itself.
+- **sshd_config semantics (M6, P6-10).** For `PermitRootLogin` and
+  `PasswordAuthentication`, sshd keeps the first value it reads. `Include`
+  is processed in place, and its files are read in lexical order (glob(3),
+  whose wildcards do not match a leading dot). sshd saves and restores the
+  Match state around each included file, so a `Match` inside an included file
+  ends with that file. A `Match` line makes the following lines conditional
+  (including `Include` lines) until a `Match all` line, which sshd applies at
+  startup, makes them global again. Relative `Include` paths are resolved
+  against the configuration file's directory, which equals OpenSSH's
+  `/etc/ssh` for the default location. For a `SALUS_SSHD_CONFIG` outside
+  `/etc/ssh` (a host's configuration mounted elsewhere), absolute includes
+  under `/etc/ssh/` are read from that directory instead, and any other
+  absolute include makes the rules stay silent. Quoted values may use `"` or
+  `'`; backslash escapes are not interpreted. On Ubuntu, `sshd_config.d/50-cloud-init.conf` is often root-only, so
+  a non-root run reports nothing for the sshd rules rather than a possibly
+  wrong default. `KbdInteractiveAuthentication` with `UsePAM yes` can also
+  accept passwords; it is not evaluated.
+- **New checks in the default run (Q-012).** On hosts without systemd
+  (containers, WSL 1, macOS, Windows), `systemd-failed` and `time-sync`
+  report WARN, like the other Linux-only checks; without `kubectl`,
+  `kubernetes-pods` reports WARN like `kubernetes-status`. The CI, CD, and
+  Docker smoke steps use `--only`, so they are unaffected.
 - **Seeded catalog text is insert-only.** `EnsureDefaultFeatures` uses
   `FirstOrCreate`, so changes to names or descriptions in `seed.go` reach only
   new databases. Updating rows on every open would break read-only databases.
-  The `docker-status` and `kubernetes-status` descriptions ("reachable") were
-  therefore left as they are, and the README describes the full behavior.
+  M5 left the `docker-status` and `kubernetes-status` descriptions
+  ("reachable") as they were. M6 updated them in `seed.go` (and the
+  `disk-space` and `service-uptime` descriptions, for multiple targets), so
+  new databases list the full behavior while databases created earlier keep
+  the old text in `check list`; the README describes the behavior either way.
 - **Pruning and time zones (P3-6).** Stored `started_at` values keep the UTC
   offset they were written with, and the text sorts correctly only within one
-  offset. `PruneScanJobs` compares with `julianday`, and a test mixes UTC+14
+  offset. Since M6, `ListScanJobs` (used by `jobs list` and the default
+  `jobs diff` pair) and `ScanStats` also order by `julianday(started_at)`; the
+  independent review showed the text order picking the wrong pair across a
+  DST change. `PruneScanJobs` compares with `julianday`, and a test mixes UTC+14
   and UTC-8 rows. Pruning frees pages inside the SQLite file but does not
   shrink it; `VACUUM` was not added.
 - **Test depending on the host.** *Resolved 2026-09-27 (P1-8):* external tools
@@ -326,7 +378,7 @@ as strong evidence, and treat GitHub Actions results as authoritative.
 
 ## Open questions and decisions
 
-Decisions recorded 2026-09-27 from the maintainer.
+Decisions recorded 2026-09-27 from the maintainer (Q-012 to Q-014 on 2026-10-03).
 
 | ID | Question | Why it matters | Decision |
 |---|---|---|---|
@@ -341,3 +393,6 @@ Decisions recorded 2026-09-27 from the maintainer.
 | Q-009 | Should gosec findings gate merges, and at what severity? | See SEC-005. | **No.** gosec stays non-blocking. Findings are triaged in GitHub Code Scanning. |
 | Q-010 | For SEC-006, is GitHub's immutable-release attestation (observed on v1.0.1, verifiable with `gh release verify-asset`) enough, or should releases also get build provenance attestations? | The release attestation shows an asset belongs to the release and was not changed afterwards. It does not show that the workflow built the asset. Build provenance adds `id-token: write` and `attestations: write` to the `release` job. | **Add build provenance** (2026-09-27). `actions/attest` runs in a CD `package` job that uses only first-party actions, on tag and manual runs; a separate `release` job publishes (P2-6, SEC-006). |
 | Q-011 | Should CI and CD pin `ubuntu-24.04` instead of `ubuntu-latest`, which moves to Ubuntu 26 from 2026-10-19? | Pinning keeps release builds reproducible, but needs manual bumps. Staying on `latest` needs a CD `workflow_dispatch` run after the switch and before the next tag (P2-8). | **Pin CD only** (2026-09-27). CD's linux/amd64 build and release job use `ubuntu-24.04`, matching linux/arm64 on `ubuntu-24.04-arm`. CI, Security, and Docker stay on `ubuntu-latest` for early warning. |
+| Q-012 | Should the M6 checks (`disk-inodes`, `systemd-failed`, `time-sync`, `kubernetes-pods`, `cert-expiry`) run in a plain `check run`? | Adding checks to the default run can raise exit codes on hosts that passed before. | **Yes** (2026-10-03). They join the default run; `cert-expiry` runs only when `--cert` is given. The changes are listed under "Upgrading from 1.0.2" (P6-5 to P6-9). |
+| Q-013 | Should `sshd-password-auth` warn only on an explicit `PasswordAuthentication yes`, or on the effective value, which defaults to yes when unset? | The effective value catches stock installs, so more hosts warn. | **Effective value** (2026-10-03). An unset keyword counts as yes, as in OpenSSH (P6-10). |
+| Q-014 | What severity for pods in CrashLoopBackOff or not Ready, and for nodes reporting Memory, Disk, or PID pressure? | Severity decides exit codes and alerting. | **WARN** (2026-10-03), matching the P3-2 decision for unhealthy containers. FAIL stays reserved for an unreachable cluster or no Ready node (P6-9). |

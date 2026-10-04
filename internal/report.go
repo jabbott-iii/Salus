@@ -83,17 +83,27 @@ func WriteJobsJSON(w io.Writer, jobs []ScanJob) error {
 func WriteJobJSON(w io.Writer, job ScanJob, results []ScanResult) error {
 	outcomes := make([]CheckOutcome, 0, len(results))
 	for _, r := range results {
-		outcomes = append(outcomes, CheckOutcome{
-			Key:      r.Key,
-			Status:   CheckStatus(r.Status),
-			Message:  sanitizeMessage(r.Message),
-			Duration: time.Duration(r.DurationMs) * time.Millisecond,
-		})
+		outcomes = append(outcomes, resultOutcome(r))
 	}
 	return writeJSON(w, struct {
 		jobJSON
 		Results []CheckOutcome `json:"results"`
 	}{newJobJSON(job), outcomes})
+}
+
+// resultOutcome converts a stored result back into the outcome it recorded.
+// Messages and targets are sanitized like in RunChecks, because rows stored
+// before SEC-009 may hold control characters.
+func resultOutcome(r ScanResult) CheckOutcome {
+	return CheckOutcome{
+		Key:      r.Key,
+		Target:   sanitizeMessage(r.Target),
+		Status:   CheckStatus(r.Status),
+		Message:  sanitizeMessage(r.Message),
+		Value:    r.Value,
+		Unit:     r.Unit,
+		Duration: time.Duration(r.DurationMs) * time.Millisecond,
+	}
 }
 
 func writeJSON(w io.Writer, v any) error {

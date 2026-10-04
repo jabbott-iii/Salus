@@ -18,10 +18,15 @@ package internal
 
 import (
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	"gorm.io/driver/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func newSeededTestDatabase(t *testing.T) *Database {
@@ -228,5 +233,114 @@ func TestPruneScanJobs(t *testing.T) {
 
 	if n, err := PruneScanJobs(db, cutoff, false); err != nil || n != 0 {
 		t.Errorf("second PruneScanJobs() = %d, %v, want 0, nil", n, err)
+	}
+}
+
+func TestRecordScanPersistsTargetsAndValues(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	outcomes := []CheckOutcome{
+		CheckOutcome{Key: keyDiskSpace, Target: "/", Status: StatusPass, Message: "/: 10.0% used"}.withValue(10, unitPercent),
+		CheckOutcome{Key: keyDiskSpace, Target: "/var", Status: StatusWarn, Message: "/var: 85.5% used"}.withValue(85.5, unitPercent),
+		{Key: keyTimeSync, Status: StatusPass, Message: "system clock is synchronized"},
+		CheckOutcome{Key: keySystemdFailed, Status: StatusPass, Message: "no failed systemd units"}.withValue(0, unitCount),
+	}
+	job, err := RecordScan(db, time.Now(), outcomes)
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	if job.Summary != "3 pass, 1 warn, 0 fail" {
+		t.Errorf("job.Summary = %q", job.Summary)
+	}
+
+	_, results, err := GetScanJob(db, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanJob() error = %v", err)
+	}
+	if len(results) != len(outcomes) {
+		t.Fatalf("got %d results, want %d", len(results), len(outcomes))
+	}
+	for i, r := range results {
+		got := resultOutcome(r)
+		want := outcomes[i]
+		if got.Key != want.Key || got.Target != want.Target || got.Unit != want.Unit || !sameValue(got.Value, want.Value) {
+			t.Errorf("result %d = %+v (value %v), want %+v (value %v)", i, got, deref(got.Value), want, deref(want.Value))
+		}
+	}
+}
+
+func sameValue(a, b *float64) bool {
+	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+}
+
+func deref(v *float64) any {
+	if v == nil {
+		return nil
+	}
+	return *v
+}
+
+// The v1.0.2 schema, before Target, Value, and Unit existed. The Feature
+// relation is part of it: it gives the table its foreign key, so the upgrade
+// migrates with ALTER TABLE ADD COLUMN, as a real v1.0.2 database does.
+type scanResultV102 struct {
+	ID         uint `gorm:"primaryKey"`
+	ScanJobID  uint `gorm:"not null;index"`
+	FeatureID  uint `gorm:"not null;index"`
+	Feature    Feature
+	Key        string `gorm:"not null"`
+	Status     string `gorm:"not null"`
+	Message    string
+	DurationMs int64
+	CreatedAt  time.Time
+}
+
+func (scanResultV102) TableName() string { return "scan_results" }
+
+func TestOpenDatabaseMigratesV102Results(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "salus.db")
+	old, err := gorm.Open(sqlite.Open(path), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if err := old.AutoMigrate(&FeatureCategory{}, &Feature{}, &ScanJob{}, &scanResultV102{}); err != nil {
+		t.Fatalf("create v1.0.2 schema: %v", err)
+	}
+	job := ScanJob{StartedAt: time.Now(), Status: "completed", Summary: "1 pass, 0 warn, 0 fail"}
+	if err := old.Create(&job).Error; err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := old.Create(&scanResultV102{ScanJobID: job.ID, FeatureID: 1, Key: keyDiskSpace, Status: "PASS", Message: "/: 1.0% used"}).Error; err != nil {
+		t.Fatalf("create result: %v", err)
+	}
+	sqlDB, err := old.DB()
+	if err != nil {
+		t.Fatalf("DB(): %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	db, err := OpenDatabase(path)
+	if err != nil {
+		t.Fatalf("OpenDatabase() on a v1.0.2 database error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	})
+
+	_, results, err := GetScanJob(db, job.ID)
+	if err != nil {
+		t.Fatalf("GetScanJob() error = %v", err)
+	}
+	if len(results) != 1 || results[0].Target != "" || results[0].Value != nil || results[0].Unit != "" || results[0].Message != "/: 1.0% used" {
+		t.Errorf("migrated result = %+v, want the old row with an empty target and unit and no value", results)
+	}
+
+	// New rows, including new check keys, are recorded after the migration.
+	outcome := CheckOutcome{Key: keyDiskInodes, Target: "/", Status: StatusPass, Message: "ok"}.withValue(3, unitPercent)
+	if _, err := RecordScan(db, time.Now(), []CheckOutcome{outcome}); err != nil {
+		t.Fatalf("RecordScan() after migration error = %v", err)
 	}
 }

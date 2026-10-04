@@ -82,18 +82,26 @@ func RecordScan(db *Database, startedAt time.Time, outcomes []CheckOutcome) (Sca
 		}
 
 		pass, warn, fail := 0, 0, 0
+		features := map[string]Feature{} // targeted checks repeat a key
 		for _, outcome := range outcomes {
-			feature, err := featureByKey(tx, outcome.Key)
-			if err != nil {
-				return err
+			feature, ok := features[outcome.Key]
+			if !ok {
+				var err error
+				if feature, err = featureByKey(tx, outcome.Key); err != nil {
+					return err
+				}
+				features[outcome.Key] = feature
 			}
 
 			result := ScanResult{
 				ScanJobID:  job.ID,
 				FeatureID:  feature.ID,
 				Key:        outcome.Key,
+				Target:     truncateMessage(outcome.Target, maxStoredMessageLen),
 				Status:     string(outcome.Status),
 				Message:    truncateMessage(outcome.Message, maxStoredMessageLen),
+				Value:      outcome.Value,
+				Unit:       outcome.Unit,
 				DurationMs: outcome.Duration.Milliseconds(),
 				CreatedAt:  time.Now(),
 			}
@@ -126,9 +134,10 @@ func RecordScan(db *Database, startedAt time.Time, outcomes []CheckOutcome) (Sca
 }
 
 // ListScanJobs returns the most recent scan jobs, newest first, limited to limit rows
-// (or all rows when limit <= 0).
+// (or all rows when limit <= 0). Jobs are ordered by the instant they
+// started (see startedBefore for why the stored text does not sort).
 func ListScanJobs(db *Database, limit int) ([]ScanJob, error) {
-	query := db.Conn().Order("started_at DESC, id DESC")
+	query := db.Conn().Order("julianday(started_at) DESC, id DESC")
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

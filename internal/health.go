@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -39,9 +40,16 @@ const (
 	keyKubernetes    = "kubernetes-status"
 	keyServiceUptime = "service-uptime"
 	keyMisconfig     = "misconfig"
+	keyDiskInodes    = "disk-inodes"
+	keyKubePods      = "kubernetes-pods"
+	keySystemdFailed = "systemd-failed"
+	keyTimeSync      = "time-sync"
+	keyCertExpiry    = "cert-expiry"
 )
 
-// AllCheckKeys lists every built-in check key in default run order.
+// AllCheckKeys lists every built-in check key in default run order. Checks
+// added after v1.0.2 are appended, so the existing checks keep their
+// positions in --json output.
 var AllCheckKeys = []string{
 	keyDiskSpace,
 	keyMemory,
@@ -50,6 +58,11 @@ var AllCheckKeys = []string{
 	keyKubernetes,
 	keyServiceUptime,
 	keyMisconfig,
+	keyDiskInodes,
+	keyKubePods,
+	keySystemdFailed,
+	keyTimeSync,
+	keyCertExpiry,
 }
 
 // CheckStatus represents the severity of a single health check outcome.
@@ -63,18 +76,51 @@ const (
 )
 
 // CheckOutcome captures the result of running a single health check.
+//
+// Target names what one run of a check examined (a mount path, a service, a
+// certificate file) when the check can run once per target; it is empty
+// otherwise. Value and Unit carry the number the status was decided from,
+// when there is one, for monitoring outputs.
 type CheckOutcome struct {
 	Key      string        `json:"key"`
+	Target   string        `json:"target,omitempty"`
 	Status   CheckStatus   `json:"status"`
 	Message  string        `json:"message"`
+	Value    *float64      `json:"value,omitempty"`
+	Unit     string        `json:"unit,omitempty"`
 	Duration time.Duration `json:"duration_ns"`
 }
 
+// Units of CheckOutcome.Value. They are part of the JSON and Prometheus
+// output contract.
+const (
+	unitPercent = "percent"
+	unitSeconds = "seconds"
+	unitDays    = "days"
+	unitCount   = "count"
+)
+
+// withValue returns o with its measured value and unit set.
+func (o CheckOutcome) withValue(value float64, unit string) CheckOutcome {
+	o.Value = &value
+	o.Unit = unit
+	return o
+}
+
 // CheckOptions configures thresholds and targets used by the built-in health checks.
+//
+// The plural target fields (DiskPaths, ServiceNames, CertPaths) are what the
+// CLI sets. RunChecks runs a targeted check once per entry, with the matching
+// singular field (DiskPath, ServiceName, CertPath) set to that entry; when a
+// plural field is empty, the singular field is the only target.
 type CheckOptions struct {
+	DiskPaths       []string
 	DiskPath        string
 	DiskWarnPercent float64
 	DiskFailPercent float64
+
+	InodeWarnPercent float64
+	InodeFailPercent float64
 
 	MemWarnPercent float64
 	MemFailPercent float64
@@ -82,11 +128,20 @@ type CheckOptions struct {
 	LoadWarnPercent float64
 	LoadFailPercent float64
 
-	ServiceName string
+	ServiceNames []string
+	ServiceName  string
 
 	// KubeContext selects a kubeconfig context for kubectl; empty means the
-	// current context.
-	KubeContext string
+	// current context. KubeNamespace selects the namespace for
+	// kubernetes-pods; empty means the context's namespace.
+	KubeContext   string
+	KubeNamespace string
+
+	// CertPaths are certificate files for cert-expiry. Without any,
+	// cert-expiry does not run.
+	CertPaths    []string
+	CertPath     string
+	CertWarnDays int
 
 	CommandTimeout time.Duration
 
@@ -100,13 +155,17 @@ type CheckOptions struct {
 // check run also uses them as its flag defaults, on every platform. The
 // resource checks read thresholds through the accessors in health-thresholds.go.
 const (
-	defaultDiskWarnPercent = 80.0
-	defaultDiskFailPercent = 90.0
-	defaultMemWarnPercent  = 80.0
-	defaultMemFailPercent  = 90.0
-	defaultLoadWarnPercent = 80.0
-	defaultLoadFailPercent = 100.0
-	defaultCommandTimeout  = 3 * time.Second
+	defaultDiskWarnPercent  = 80.0
+	defaultDiskFailPercent  = 90.0
+	defaultInodeWarnPercent = 80.0
+	defaultInodeFailPercent = 90.0
+	defaultMemWarnPercent   = 80.0
+	defaultMemFailPercent   = 90.0
+	defaultLoadWarnPercent  = 80.0
+	defaultLoadFailPercent  = 100.0
+	defaultCertWarnDays     = 30
+	defaultCommandTimeout   = 3 * time.Second
+	defaultDiskPath         = "/"
 )
 
 func (o CheckOptions) commandTimeout() time.Duration {
@@ -191,6 +250,68 @@ var checkRegistry = map[string]checkFunc{
 	keyKubernetes:    checkKubernetesStatus,
 	keyServiceUptime: checkServiceUptime,
 	keyMisconfig:     checkMisconfiguration,
+	keyDiskInodes:    checkDiskInodes,
+	keyKubePods:      checkKubernetesPods,
+	keySystemdFailed: checkSystemdFailed,
+	keyTimeSync:      checkTimeSync,
+	keyCertExpiry:    checkCertExpiry,
+}
+
+// checkTarget makes a check run once per target. targets lists them in run
+// order without repeats; bind sets one of them for a single run. A check
+// whose targets function returns none is skipped.
+type checkTarget struct {
+	targets func(CheckOptions) []string
+	bind    func(*CheckOptions, string)
+}
+
+var checkTargets = map[string]checkTarget{
+	keyDiskSpace:     {diskTargets, bindDiskPath},
+	keyDiskInodes:    {diskTargets, bindDiskPath},
+	keyServiceUptime: {serviceTargets, func(o *CheckOptions, name string) { o.ServiceName = name }},
+	keyCertExpiry:    {certTargets, func(o *CheckOptions, path string) { o.CertPath = path }},
+}
+
+func diskTargets(o CheckOptions) []string {
+	single := o.DiskPath
+	if single == "" {
+		single = defaultDiskPath
+	}
+	return uniqueTargets(o.DiskPaths, single)
+}
+
+func bindDiskPath(o *CheckOptions, path string) { o.DiskPath = path }
+
+// serviceTargets returns the services to check; a single empty name means
+// host uptime.
+func serviceTargets(o CheckOptions) []string {
+	return uniqueTargets(o.ServiceNames, o.ServiceName)
+}
+
+// certTargets returns the certificate files to check, or none, which skips
+// cert-expiry.
+func certTargets(o CheckOptions) []string {
+	if len(o.CertPaths) == 0 && o.CertPath == "" {
+		return nil
+	}
+	return uniqueTargets(o.CertPaths, o.CertPath)
+}
+
+// uniqueTargets returns list without repeats, in order, or only single when
+// list is empty.
+func uniqueTargets(list []string, single string) []string {
+	if len(list) == 0 {
+		return []string{single}
+	}
+	seen := make(map[string]bool, len(list))
+	targets := make([]string, 0, len(list))
+	for _, target := range list {
+		if !seen[target] {
+			seen[target] = true
+			targets = append(targets, target)
+		}
+	}
+	return targets
 }
 
 // ValidateCheckKeys returns an error for the first key that is not a built-in check.
@@ -204,7 +325,9 @@ func ValidateCheckKeys(keys []string) error {
 }
 
 // RunChecks executes the given check keys (or all built-in checks when keys is empty)
-// and returns their outcomes in the order requested.
+// and returns their outcomes in the order requested. A targeted check (see
+// checkTargets) yields one outcome per target, in target order, with Target
+// set.
 func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 	if len(keys) == 0 {
 		keys = AllCheckKeys
@@ -213,11 +336,32 @@ func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 		return nil, err
 	}
 
+	// A repeated key runs once, so no result (or Prometheus series) repeats.
+	seen := make(map[string]bool, len(keys))
+	keys = slices.DeleteFunc(slices.Clone(keys), func(key string) bool {
+		duplicate := seen[key]
+		seen[key] = true
+		return duplicate
+	})
+
 	outcomes := make([]CheckOutcome, 0, len(keys))
-	for _, key := range keys {
-		outcome := checkRegistry[key](opts)
+	run := func(key string, o CheckOptions, target string) {
+		outcome := checkRegistry[key](o)
+		outcome.Target = sanitizeMessage(target)
 		outcome.Message = sanitizeMessage(outcome.Message)
 		outcomes = append(outcomes, outcome)
+	}
+	for _, key := range keys {
+		spec, targeted := checkTargets[key]
+		if !targeted {
+			run(key, opts, "")
+			continue
+		}
+		for _, target := range spec.targets(opts) {
+			o := opts
+			spec.bind(&o, target)
+			run(key, o, target)
+		}
 	}
 	return outcomes, nil
 }
@@ -253,6 +397,7 @@ func checkDockerStatus(opts CheckOptions) CheckOutcome {
 	// A reachable daemon can still run broken workloads. Containers failing
 	// their HEALTHCHECK or restarting are a WARN: the runtime itself works.
 	var problems []string
+	count := 0 // containers listed as unhealthy or restarting (one can be in both)
 	for _, query := range []struct {
 		label string
 		args  []string
@@ -266,13 +411,15 @@ func checkDockerStatus(opts CheckOptions) CheckOutcome {
 		}
 		if names := containerNames(string(out)); len(names) > 0 {
 			problems = append(problems, query.label+": "+nameList(names))
+			count += len(names)
 		}
 	}
 
 	if len(problems) > 0 {
-		return CheckOutcome{Key: keyDocker, Status: StatusWarn, Message: msg + "; " + strings.Join(problems, "; "), Duration: time.Since(start)}
+		return CheckOutcome{Key: keyDocker, Status: StatusWarn, Message: msg + "; " + strings.Join(problems, "; "), Duration: time.Since(start)}.
+			withValue(float64(count), unitCount)
 	}
-	return CheckOutcome{Key: keyDocker, Status: StatusPass, Message: msg, Duration: time.Since(start)}
+	return CheckOutcome{Key: keyDocker, Status: StatusPass, Message: msg, Duration: time.Since(start)}.withValue(0, unitCount)
 }
 
 // dockerServerVersion returns the version from docker info output. The output
@@ -315,20 +462,27 @@ func nameList(names []string) string {
 	return fmt.Sprintf("%s and %d more", strings.Join(names[:maxListedNames], ", "), len(names)-maxListedNames)
 }
 
-// nodeReadinessJSONPath prints one "name<TAB>Ready condition status" line per
-// node.
-const nodeReadinessJSONPath = `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\n"}{end}`
+// nodeReadinessJSONPath prints one line per node: its name, then the status
+// of its Ready, MemoryPressure, DiskPressure, and PIDPressure conditions,
+// separated by tabs.
+const nodeReadinessJSONPath = `jsonpath={range .items[*]}{.metadata.name}{"\t"}{.status.conditions[?(@.type=="Ready")].status}{"\t"}{.status.conditions[?(@.type=="MemoryPressure")].status}{"\t"}{.status.conditions[?(@.type=="DiskPressure")].status}{"\t"}{.status.conditions[?(@.type=="PIDPressure")].status}{"\n"}{end}`
 
-func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
-	start := time.Now()
+// nodePressureConditions are the node conditions, in nodeReadinessJSONPath
+// column order after Ready, that report resource pressure when True.
+var nodePressureConditions = []string{"MemoryPressure", "DiskPressure", "PIDPressure"}
+
+// kubectlFor validates the --kube-context option and returns a kubectl runner
+// bound to it, plus a description of the cluster for messages. A non-nil
+// outcome means the check stops with that result.
+func kubectlFor(opts CheckOptions, key string, start time.Time) (func(args ...string) ([]byte, error), string, *CheckOutcome) {
 	kubeContext := strings.TrimSpace(opts.KubeContext)
 
 	if kubeContext != "" && !validKubeContext(kubeContext) {
-		return CheckOutcome{Key: keyKubernetes, Status: StatusFail, Message: fmt.Sprintf("invalid kubeconfig context %q: it must not start with - or contain control characters", kubeContext), Duration: time.Since(start)}
+		return nil, "", &CheckOutcome{Key: key, Status: StatusFail, Message: fmt.Sprintf("invalid kubeconfig context %q: it must not start with - or contain control characters", kubeContext), Duration: time.Since(start)}
 	}
 
 	if !opts.hasTool("kubectl") {
-		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: "kubectl CLI not found in PATH", Duration: time.Since(start)}
+		return nil, "", &CheckOutcome{Key: key, Status: StatusWarn, Message: "kubectl CLI not found in PATH", Duration: time.Since(start)}
 	}
 
 	// A single "--context=<name>" argument binds the value to the flag, so the
@@ -342,6 +496,15 @@ func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
 	cluster := "kubernetes cluster"
 	if kubeContext != "" {
 		cluster = fmt.Sprintf("kubernetes cluster (context %s)", kubeContext)
+	}
+	return kubectl, cluster, nil
+}
+
+func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
+	start := time.Now()
+	kubectl, cluster, stop := kubectlFor(opts, keyKubernetes, start)
+	if stop != nil {
+		return *stop
 	}
 
 	// cluster-info lists Services in kube-system, which namespace-scoped users
@@ -359,36 +522,64 @@ func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
 		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: fmt.Sprintf("%s reachable; node readiness unknown: %s", cluster, errorLine(string(out), err)), Duration: time.Since(start)}
 	}
 
-	ready, notReady := parseNodeReadiness(string(out))
-	total := ready + len(notReady)
+	nodes := parseNodeReadiness(string(out))
+	total := nodes.ready + len(nodes.notReady)
+	// Pressure is reported in addition to readiness; it is a WARN (Q-014).
+	pressure := ""
+	if len(nodes.pressure) > 0 {
+		pressure = "; under pressure: " + nameList(nodes.pressure)
+	}
 	switch {
 	case total == 0:
 		return CheckOutcome{Key: keyKubernetes, Status: StatusFail, Message: fmt.Sprintf("%s reachable, but it has no nodes", cluster), Duration: time.Since(start)}
-	case ready == 0:
-		return CheckOutcome{Key: keyKubernetes, Status: StatusFail, Message: fmt.Sprintf("%s reachable, but no nodes are Ready (0/%d); NotReady: %s", cluster, total, nameList(notReady)), Duration: time.Since(start)}
-	case len(notReady) > 0:
-		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: fmt.Sprintf("%s reachable; %d/%d nodes Ready; NotReady: %s", cluster, ready, total, nameList(notReady)), Duration: time.Since(start)}
+	case nodes.ready == 0:
+		return CheckOutcome{Key: keyKubernetes, Status: StatusFail, Message: fmt.Sprintf("%s reachable, but no nodes are Ready (0/%d); NotReady: %s%s", cluster, total, nameList(nodes.notReady), pressure), Duration: time.Since(start)}
+	case len(nodes.notReady) > 0:
+		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: fmt.Sprintf("%s reachable; %d/%d nodes Ready; NotReady: %s%s", cluster, nodes.ready, total, nameList(nodes.notReady), pressure), Duration: time.Since(start)}
+	case len(nodes.pressure) > 0:
+		return CheckOutcome{Key: keyKubernetes, Status: StatusWarn, Message: fmt.Sprintf("%s reachable; %d/%d nodes Ready%s", cluster, nodes.ready, total, pressure), Duration: time.Since(start)}
 	default:
-		return CheckOutcome{Key: keyKubernetes, Status: StatusPass, Message: fmt.Sprintf("%s reachable; %d/%d nodes Ready", cluster, ready, total), Duration: time.Since(start)}
+		return CheckOutcome{Key: keyKubernetes, Status: StatusPass, Message: fmt.Sprintf("%s reachable; %d/%d nodes Ready", cluster, nodes.ready, total), Duration: time.Since(start)}
 	}
 }
 
-// parseNodeReadiness counts Ready nodes and names the others in output
-// produced with nodeReadinessJSONPath. Lines without a tab, such as kubectl
-// warnings on stderr, are ignored.
-func parseNodeReadiness(out string) (ready int, notReady []string) {
+// nodeHealth summarizes kubectl get nodes output.
+type nodeHealth struct {
+	ready    int
+	notReady []string
+	// pressure lists nodes with a True pressure condition, as
+	// "name (MemoryPressure, DiskPressure)".
+	pressure []string
+}
+
+// parseNodeReadiness counts Ready nodes and names the others and those under
+// pressure, in output produced with nodeReadinessJSONPath. Lines without a
+// tab, such as kubectl warnings on stderr, are ignored. Missing pressure
+// columns count as no pressure.
+func parseNodeReadiness(out string) nodeHealth {
+	var nodes nodeHealth
 	for _, line := range strings.Split(out, "\n") {
-		name, status, ok := strings.Cut(strings.TrimRight(line, "\r"), "\t")
-		if !ok || name == "" || strings.ContainsAny(name, " \t") {
+		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
+		name := fields[0]
+		if len(fields) < 2 || name == "" || strings.ContainsAny(name, " ") {
 			continue
 		}
-		if status == "True" {
-			ready++
+		if fields[1] == "True" {
+			nodes.ready++
 		} else {
-			notReady = append(notReady, name)
+			nodes.notReady = append(nodes.notReady, name)
+		}
+		var conditions []string
+		for i, condition := range nodePressureConditions {
+			if len(fields) > i+2 && fields[i+2] == "True" {
+				conditions = append(conditions, condition)
+			}
+		}
+		if len(conditions) > 0 {
+			nodes.pressure = append(nodes.pressure, fmt.Sprintf("%s (%s)", name, strings.Join(conditions, ", ")))
 		}
 	}
-	return ready, notReady
+	return nodes
 }
 
 // forbidden reports whether kubectl output carries an HTTP 403 from the API
@@ -459,7 +650,8 @@ func checkProcessUptime(start time.Time) CheckOutcome {
 	if err != nil {
 		return CheckOutcome{Key: keyServiceUptime, Status: StatusWarn, Message: "no --service provided and host uptime unavailable: " + err.Error(), Duration: time.Since(start)}
 	}
-	return CheckOutcome{Key: keyServiceUptime, Status: StatusPass, Message: fmt.Sprintf("host has been up for %s", uptime.Round(time.Second)), Duration: time.Since(start)}
+	return CheckOutcome{Key: keyServiceUptime, Status: StatusPass, Message: fmt.Sprintf("host has been up for %s", uptime.Round(time.Second)), Duration: time.Since(start)}.
+		withValue(uptime.Seconds(), unitSeconds)
 }
 
 // misconfigRule is one misconfiguration test. Its id prefixes every problem
@@ -478,6 +670,9 @@ var misconfigRules = []misconfigRule{
 	{"kubeconfig-permissions", kubeconfigPermissions},
 	{"docker-socket-permissions", dockerSocketPermissions},
 	{"path-world-writable", worldWritablePath},
+	{"docker-tcp-insecure", dockerTCPInsecure},
+	{"sshd-root-login", sshdRootLogin},
+	{"sshd-password-auth", sshdPasswordAuth},
 }
 
 func checkMisconfiguration(opts CheckOptions) CheckOutcome {
@@ -491,10 +686,12 @@ func checkMisconfiguration(opts CheckOptions) CheckOutcome {
 	}
 
 	if len(warnings) == 0 {
-		return CheckOutcome{Key: keyMisconfig, Status: StatusPass, Message: "no common misconfigurations detected", Duration: time.Since(start)}
+		return CheckOutcome{Key: keyMisconfig, Status: StatusPass, Message: "no common misconfigurations detected", Duration: time.Since(start)}.
+			withValue(0, unitCount)
 	}
 
-	return CheckOutcome{Key: keyMisconfig, Status: StatusWarn, Message: strings.Join(warnings, "; "), Duration: time.Since(start)}
+	return CheckOutcome{Key: keyMisconfig, Status: StatusWarn, Message: strings.Join(warnings, "; "), Duration: time.Since(start)}.
+		withValue(float64(len(warnings)), unitCount)
 }
 
 func homeUnset() []string {
@@ -598,6 +795,28 @@ func dockerSocketPath() (string, bool) {
 	default:
 		return path, true
 	}
+}
+
+// dockerTCPInsecure warns when the Docker CLI is pointed at a TCP endpoint
+// without TLS verification. Without verification, anyone on the path to the
+// daemon can impersonate it, and a daemon that accepts such connections lets
+// anyone who can reach it control the host as root. Like the Docker CLI, any
+// non-empty DOCKER_TLS_VERIFY counts as enabled. Docker contexts and the
+// --tlsverify flag are not consulted.
+func dockerTCPInsecure() []string {
+	host := os.Getenv("DOCKER_HOST")
+	if !strings.HasPrefix(strings.ToLower(host), "tcp://") || os.Getenv("DOCKER_TLS_VERIFY") != "" {
+		return nil
+	}
+	endpoint := host[len("tcp://"):]
+	// Only host and port are reported; anything after them is dropped.
+	if i := strings.IndexAny(endpoint, "/?#"); i >= 0 {
+		endpoint = endpoint[:i]
+	}
+	if i := strings.LastIndex(endpoint, "@"); i >= 0 {
+		endpoint = endpoint[i+1:]
+	}
+	return []string{fmt.Sprintf("DOCKER_HOST uses tcp://%s without TLS verification (set DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH, or use ssh:// or a unix socket)", endpoint)}
 }
 
 // worldWritablePath warns about PATH directories that every user can write

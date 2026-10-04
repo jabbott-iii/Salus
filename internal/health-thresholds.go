@@ -38,6 +38,12 @@ func (o CheckOptions) diskWarnPercent() float64 {
 func (o CheckOptions) diskFailPercent() float64 {
 	return orDefault(o.DiskFailPercent, defaultDiskFailPercent)
 }
+func (o CheckOptions) inodeWarnPercent() float64 {
+	return orDefault(o.InodeWarnPercent, defaultInodeWarnPercent)
+}
+func (o CheckOptions) inodeFailPercent() float64 {
+	return orDefault(o.InodeFailPercent, defaultInodeFailPercent)
+}
 func (o CheckOptions) memWarnPercent() float64 {
 	return orDefault(o.MemWarnPercent, defaultMemWarnPercent)
 }

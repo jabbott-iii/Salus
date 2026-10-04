@@ -396,38 +396,65 @@ func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
 		{
 			name: "defaults",
 			want: CheckOptions{
-				DiskPath:        "/",
+				DiskPaths:       []string{"/"},
 				DiskWarnPercent: 80, DiskFailPercent: 90,
+				InodeWarnPercent: 80, InodeFailPercent: 90,
 				MemWarnPercent: 80, MemFailPercent: 90,
 				LoadWarnPercent: 80, LoadFailPercent: 100,
+				CertWarnDays:   30,
 				CommandTimeout: 3 * time.Second,
 			},
 		},
 		{
 			name: "overrides",
 			args: []string{
-				"--disk-path", "/data", "--service", "nginx", "--kube-context", "prod",
+				"--disk-path", "/data", "--service", "nginx", "--kube-context", "prod", "--kube-namespace", "web",
 				"--disk-warn", "70", "--disk-fail", "85.5",
+				"--inode-warn", "50", "--inode-fail", "75",
 				"--mem-warn", "60", "--mem-fail", "95",
 				"--load-warn", "150", "--load-fail", "300",
+				"--cert", "/etc/ssl/a.pem", "--cert-warn-days", "14",
 				"--timeout", "10s",
 			},
 			want: CheckOptions{
-				DiskPath: "/data", ServiceName: "nginx", KubeContext: "prod",
+				DiskPaths: []string{"/data"}, ServiceNames: []string{"nginx"}, KubeContext: "prod", KubeNamespace: "web",
 				DiskWarnPercent: 70, DiskFailPercent: 85.5,
+				InodeWarnPercent: 50, InodeFailPercent: 75,
 				MemWarnPercent: 60, MemFailPercent: 95,
 				LoadWarnPercent: 150, LoadFailPercent: 300,
+				CertPaths: []string{"/etc/ssl/a.pem"}, CertWarnDays: 14,
 				CommandTimeout: 10 * time.Second,
 			},
 		},
 		{
-			name: "percentages at the 100 limit",
-			args: []string{"--disk-fail", "100", "--mem-fail", "100"},
+			name: "repeated targets",
+			args: []string{
+				"--disk-path", "/", "--disk-path", "/var,with,commas",
+				"--service", "nginx,sshd", "--service", "cron",
+				"--cert", "a.pem", "--cert", "b,c.pem",
+			},
 			want: CheckOptions{
-				DiskPath:        "/",
+				DiskPaths:       []string{"/", "/var,with,commas"},
+				ServiceNames:    []string{"nginx", "sshd", "cron"},
+				CertPaths:       []string{"a.pem", "b,c.pem"},
+				DiskWarnPercent: 80, DiskFailPercent: 90,
+				InodeWarnPercent: 80, InodeFailPercent: 90,
+				MemWarnPercent: 80, MemFailPercent: 90,
+				LoadWarnPercent: 80, LoadFailPercent: 100,
+				CertWarnDays:   30,
+				CommandTimeout: 3 * time.Second,
+			},
+		},
+		{
+			name: "percentages at the 100 limit",
+			args: []string{"--disk-fail", "100", "--mem-fail", "100", "--inode-fail", "100"},
+			want: CheckOptions{
+				DiskPaths:       []string{"/"},
 				DiskWarnPercent: 80, DiskFailPercent: 100,
+				InodeWarnPercent: 80, InodeFailPercent: 100,
 				MemWarnPercent: 80, MemFailPercent: 100,
 				LoadWarnPercent: 80, LoadFailPercent: 100,
+				CertWarnDays:   30,
 				CommandTimeout: 3 * time.Second,
 			},
 		},
@@ -474,6 +501,18 @@ func TestCheckRunRejectsInvalidLimits(t *testing.T) {
 		{"zero timeout", []string{"--timeout", "0s"}, "invalid --timeout value 0s: must be greater than 0"},
 		{"negative timeout", []string{"--timeout=-1s"}, "invalid --timeout value -1s: must be greater than 0"},
 		{"malformed value", []string{"--disk-warn", "high"}, `invalid argument "high" for "--disk-warn" flag`},
+		{"inode warn above fail", []string{"--inode-warn", "95"}, "--inode-warn (95) must be less than --inode-fail (90)"},
+		{"inode above 100", []string{"--inode-fail", "101"}, "invalid --inode-fail value 101: must be at most 100"},
+		{"zero certificate warning days", []string{"--cert-warn-days", "0"}, "invalid --cert-warn-days value 0: must be greater than 0"},
+		{"unknown format", []string{"--format", "xml"}, `invalid --format value "xml": use text, json, nagios, prometheus, junit`},
+		{"json conflicts with format", []string{"--json", "--format", "nagios"}, "--json conflicts with --format nagios"},
+		{"json conflicts with explicit text", []string{"--json", "--format", "text"}, "--json conflicts with --format text"},
+		{"unknown fail-on", []string{"--fail-on", "never"}, `invalid --fail-on value "never": use warn or fail`},
+		{"fail-on is case-sensitive", []string{"--fail-on", "WARN"}, `invalid --fail-on value "WARN": use warn or fail`},
+		{"invalid retain", []string{"--retain", "soon"}, `invalid --retain value "soon"`},
+		{"zero retain", []string{"--retain", "0d"}, `invalid --retain value "0d": must be greater than 0`},
+		{"retain without saving", []string{"--retain", "30d", "--no-save"}, "--retain prunes saved runs, so it cannot be used with --no-save"},
+		{"cert-expiry without a file", []string{"--only", "cert-expiry"}, "cert-expiry needs at least one --cert file"},
 	}
 
 	for _, tt := range tests {
@@ -749,5 +788,233 @@ func TestJobsShowSanitizesStoredMessages(t *testing.T) {
 	}
 	if strings.ContainsAny(stdout, "\x7f\u009b") || !strings.Contains(stdout, `"message": "del? c1?[2J"`) {
 		t.Errorf("jobs show --json output = %q, want control characters replaced", stdout)
+	}
+}
+
+// executeCheckRunWith runs check run with a stub that returns outcomes, and
+// returns stdout, stderr, and the error. A nil db must never be opened.
+func executeCheckRunWith(t *testing.T, db *Database, outcomes []CheckOutcome, args ...string) (string, string, error) {
+	t.Helper()
+
+	opener := neverOpen(t)
+	if db != nil {
+		opener = openerFor(db)
+	}
+	runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) { return outcomes, nil }
+	cmd := newCheckRunCmdWith(opener, runChecks)
+	var stdout, stderr bytes.Buffer
+	cmd.SetOut(&stdout)
+	cmd.SetErr(&stderr)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return stdout.String(), stderr.String(), err
+}
+
+var (
+	passOutcome = CheckOutcome{Key: keyMisconfig, Status: StatusPass, Message: "no common misconfigurations detected"}
+	warnOutcome = CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory 85.0% used, swap 0.0% used"}
+	failOutcome = CheckOutcome{Key: keyDiskSpace, Target: "/", Status: StatusFail, Message: "/: 95.0% used (5.0% free)"}
+)
+
+func TestCheckRunFailOn(t *testing.T) {
+	tests := []struct {
+		name     string
+		outcomes []CheckOutcome
+		args     []string
+		want     int
+	}{
+		{"pass", []CheckOutcome{passOutcome}, nil, ExitCodePass},
+		{"warn by default", []CheckOutcome{passOutcome, warnOutcome}, nil, ExitCodeWarn},
+		{"warn with fail-on warn", []CheckOutcome{warnOutcome}, []string{"--fail-on", "warn"}, ExitCodeWarn},
+		{"warn with fail-on fail", []CheckOutcome{passOutcome, warnOutcome}, []string{"--fail-on", "fail"}, ExitCodePass},
+		{"fail with fail-on fail", []CheckOutcome{warnOutcome, failOutcome}, []string{"--fail-on", "fail"}, ExitCodeFail},
+		{"fail by default", []CheckOutcome{failOutcome}, nil, ExitCodeFail},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, err := executeCheckRunWith(t, nil, tt.outcomes, append([]string{"--no-save"}, tt.args...)...)
+			if got := ExitCode(err); got != tt.want {
+				t.Errorf("ExitCode(%v) = %d, want %d", err, got, tt.want)
+			}
+			if stderr != "" {
+				t.Errorf("stderr = %q, want nothing", stderr)
+			}
+		})
+	}
+}
+
+func TestCheckRunFormats(t *testing.T) {
+	outcomes := []CheckOutcome{passOutcome.withValue(0, unitCount), warnOutcome.withValue(85, unitPercent)}
+	tests := []struct {
+		args      []string
+		wantStart string
+	}{
+		{nil, "Environment Health Check\n"},
+		{[]string{"--format", "text"}, "Environment Health Check\n"},
+		{[]string{"--format", "json"}, "[\n"},
+		{[]string{"--json", "--format", "json"}, "[\n"},
+		{[]string{"--format", "nagios"}, "SALUS WARNING - 2 checks: 1 pass, 1 warn, 0 fail | 'misconfig'=0 'memory'=85%\n"},
+		{[]string{"--format", "nagios", "--fail-on", "fail"}, "SALUS OK - 2 checks: 1 pass, 1 warn, 0 fail"},
+		{[]string{"--format", "prometheus"}, "# HELP salus_check_status "},
+		{[]string{"--format", "junit"}, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"salus\" tests=\"2\" failures=\"1\""},
+		{[]string{"--format", "junit", "--fail-on", "fail"}, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<testsuites name=\"salus\" tests=\"2\" failures=\"0\""},
+	}
+	for _, tt := range tests {
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			stdout, _, _ := executeCheckRunWith(t, nil, outcomes, append([]string{"--no-save"}, tt.args...)...)
+			if !strings.HasPrefix(stdout, tt.wantStart) {
+				t.Errorf("output starts %q, want %q", firstLines(stdout, 2), tt.wantStart)
+			}
+		})
+	}
+}
+
+func firstLines(s string, n int) string {
+	lines := strings.SplitN(s, "\n", n+1)
+	if len(lines) > n {
+		lines = lines[:n]
+	}
+	return strings.Join(lines, "\n")
+}
+
+func TestCheckRunOutputFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "salus.prom")
+
+	for _, args := range [][]string{{}, {"--quiet"}} {
+		stdout, _, err := executeCheckRunWith(t, nil, []CheckOutcome{passOutcome}, append([]string{"--no-save", "--format", "prometheus", "--output", path}, args...)...)
+		if err != nil {
+			t.Fatalf("Execute(%v) error = %v", args, err)
+		}
+		if stdout != "" {
+			t.Errorf("Execute(%v) wrote %q to stdout, want the report only in the file", args, stdout)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read output: %v", err)
+		}
+		if !strings.Contains(string(data), `salus_check_status{key="misconfig",target=""} 0`) {
+			t.Errorf("output file = %q, want the misconfig status", data)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		assertMode(t, path, 0o600)
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("directory holds %d entries, want only the output file (no temp files left)", len(entries))
+	}
+}
+
+func TestCheckRunRejectsUnusableOutputBeforeRunning(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "real.prom")
+	if err := os.WriteFile(target, nil, 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	paths := map[string]string{
+		"missing directory": filepath.Join(dir, "missing-dir", "salus.prom"),
+		"directory":         dir,
+		"parent is a file":  filepath.Join(target, "salus.prom"),
+	}
+	if runtime.GOOS != "windows" {
+		link := filepath.Join(dir, "link.prom")
+		if err := os.Symlink(target, link); err != nil {
+			t.Fatalf("symlink: %v", err)
+		}
+		paths["symbolic link"] = link
+	}
+	for name, path := range paths {
+		t.Run(name, func(t *testing.T) {
+			runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) {
+				t.Error("checks ran despite an unusable --output")
+				return nil, nil
+			}
+			cmd := newCheckRunCmdWith(neverOpen(t), runChecks)
+			cmd.SetOut(io.Discard)
+			cmd.SetErr(io.Discard)
+			cmd.SetArgs([]string{"--output", path})
+			err := cmd.Execute()
+			if got := ExitCode(err); got != ExitCodeError || !strings.Contains(err.Error(), "invalid --output") {
+				t.Errorf("ExitCode(%v) = %d, want %d with an --output error", err, got, ExitCodeError)
+			}
+		})
+	}
+}
+
+func TestCheckRunRetain(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	old := time.Now().Add(-40 * 24 * time.Hour)
+	for i := 0; i < 2; i++ {
+		if _, err := RecordScan(db, old, []CheckOutcome{passOutcome}); err != nil {
+			t.Fatalf("RecordScan() error = %v", err)
+		}
+	}
+	recent, err := RecordScan(db, time.Now().Add(-24*time.Hour), []CheckOutcome{passOutcome})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+
+	if _, _, err := executeCheckRunWith(t, db, []CheckOutcome{passOutcome}, "--retain", "30d"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	jobs, err := ListScanJobs(db, 0)
+	if err != nil {
+		t.Fatalf("ListScanJobs() error = %v", err)
+	}
+	if len(jobs) != 2 || jobs[1].ID != recent.ID {
+		t.Fatalf("jobs after --retain 30d = %+v, want the recent job and the new run", jobs)
+	}
+
+	// Even an age shorter than the run keeps the run just recorded.
+	if _, _, err := executeCheckRunWith(t, db, []CheckOutcome{passOutcome}, "--retain", "1ns"); err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if jobs, err = ListScanJobs(db, 0); err != nil || len(jobs) != 1 {
+		t.Fatalf("jobs after --retain 1ns = %+v, %v, want only the new run", jobs, err)
+	}
+}
+
+func TestCheckRunJSONIncludesTargetsAndValues(t *testing.T) {
+	stdout, _, err := executeCheckRunWith(t, nil, []CheckOutcome{failOutcome.withValue(95, unitPercent), passOutcome}, "--no-save", "--json")
+	if got := ExitCode(err); got != ExitCodeFail {
+		t.Fatalf("ExitCode(%v) = %d, want %d", err, got, ExitCodeFail)
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(stdout), &raw); err != nil {
+		t.Fatalf("output is not a JSON array: %v", err)
+	}
+	if keys := jsonKeys(t, raw[0]); keys != "duration_ns,key,message,status,target,unit,value" {
+		t.Errorf("targeted outcome keys = %s", keys)
+	}
+	// Outcomes without a target or value keep the v1.0.2 shape.
+	if keys := jsonKeys(t, raw[1]); keys != "duration_ns,key,message,status" {
+		t.Errorf("plain outcome keys = %s", keys)
+	}
+}
+
+func TestJobsShowJSONIncludesTargetsAndValues(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	job, err := RecordScan(db, time.Now(), []CheckOutcome{failOutcome.withValue(95, unitPercent), passOutcome})
+	if err != nil {
+		t.Fatalf("RecordScan() error = %v", err)
+	}
+	stdout, err := executeJobs(t, newJobsShowCmd(openerFor(db)), strconv.Itoa(int(job.ID)), "--json")
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	var got struct {
+		Results []CheckOutcome `json:"results"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(got.Results) != 2 || got.Results[0].Target != "/" || got.Results[0].Value == nil || *got.Results[0].Value != 95 ||
+		got.Results[0].Unit != unitPercent || got.Results[1].Value != nil {
+		t.Errorf("results = %+v, want the stored target, value, and unit", got.Results)
 	}
 }

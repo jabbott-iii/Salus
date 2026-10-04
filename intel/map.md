@@ -3,8 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 changes:
-P3-2 to P3-6 and P5-2).
+Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes,
+P6-1 to P6-12).
 
 ## Directory structure
 
@@ -15,19 +15,24 @@ Salus/
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
-│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show|prune;
-│   │                           check run threshold/timeout/--kube-context flags + validateLimits,
-│   │                           jobs --json, parseAge for jobs prune --older-than
+│   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show|prune|diff|stats;
+│   │                           check run flags (targets, thresholds, --format/--output,
+│   │                           --fail-on, --retain) + validateLimits, jobs --json, parseAge
 │   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence,
-│   │                           flag → CheckOptions mapping, threshold/timeout validation,
-│   │                           jobs JSON shapes, jobs prune, parseAge
-│   ├── health.go               Check keys, options, threshold/timeout defaults, thresholdStatus,
-│   │                           registry, RunChecks; docker (daemon + unhealthy/restarting containers),
-│   │                           kubernetes (reachability + node readiness, --kube-context),
+│   │                           flag → CheckOptions mapping, flag validation, formats, --output,
+│   │                           --fail-on, --retain, jobs JSON shapes, jobs prune, parseAge
+│   ├── health.go               Check keys, CheckOutcome (target/value/unit), options, defaults,
+│   │                           thresholdStatus, registry + checkTargets, RunChecks; docker,
+│   │                           kubernetes-status (readiness + node pressure, kubectlFor),
 │   │                           service-uptime, misconfig rules (misconfigRules with stable ids)
 │   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux until P3-7)
-│   ├── health-resources_linux.go   disk (statfs), memory (/proc/meminfo),
+│   ├── health-resources_linux.go   disk space + inodes (statfs), memory (/proc/meminfo),
 │   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
+│   ├── health-systemd.go       systemd-failed (systemctl list-units), time-sync (timedatectl)
+│   ├── health-pods.go          kubernetes-pods (kubectl get pods, --kube-namespace)
+│   ├── health-certs.go         cert-expiry (PEM/DER files, crypto/x509)
+│   ├── health-sshd.go          sshd-root-login / sshd-password-auth rules: sshd_config parser
+│   │                           (Include, first value wins, Match), SALUS_SSHD_CONFIG
 │   ├── health-resources_other.go   Non-Linux stubs returning WARN
 │   ├── health-mounts_linux.go  syntheticModes: WSL drvfs detection from /proc/self/mounts
 │   ├── health-mounts_other.go  syntheticModes stub (false) for other platforms
@@ -35,16 +40,24 @@ Salus/
 │   ├── health_test.go          Thresholds, RunChecks, report and exit-code helpers
 │   ├── checks_test.go          Docker/kubectl/systemctl checks with fake tools (fakeToolOptions),
 │   │                           misconfig rules with isolated env (isolateMisconfigEnv)
-│   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL
+│   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL,
+│   │                                   inode usage (inodeOutcome)
+│   ├── health-{systemd,pods,certs,sshd}_test.go  New checks: fake tools, generated certificates,
+│   │                                   sshd_config fixture trees
 │   ├── report.go               Text/JSON output (outcomes; jobs for jobs list/show --json), WorstStatus,
 │   │                           exit codes (ExitCodeFor, ExitStatusError, ExitCode)
+│   ├── report-formats.go       writeReport: Nagios, Prometheus text format, JUnit XML;
+│   │                           writeFileAtomic for --output
+│   ├── report-formats_test.go  Golden output per format, escaping, atomic writes
 │   ├── database.go             GORM models, NewDatabase (owner-only file) + AutoMigrate, OpenDatabase, Close
 │   ├── database-path.go        SALUS_DB_PATH / per-user default path per OS, databaseFile
 │   ├── database-path_test.go   Path resolution per OS, file modes, read-only and ?param handling
 │   ├── database_test.go
 │   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
 │   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob, PruneScanJobs
-│   └── scan-store_test.go
+│   ├── scan-store_test.go      Includes the v1.0.2 → M6 schema migration test
+│   ├── scan-history.go         diffResults (jobs diff), ScanStats (jobs stats)
+│   └── scan-history_test.go
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
 ├── .github/dependabot.yml      Weekly updates: gomod, github-actions (codeql-action + artifact-actions groups), docker
 ├── .github/workflows/
@@ -83,18 +96,27 @@ flowchart LR
     Root --> JobsList["jobs list"]
     Root --> JobsShow["jobs show"]
     Root --> JobsPrune["jobs prune"]
+    Root --> JobsDiff["jobs diff"]
+    Root --> JobsStats["jobs stats"]
 
     CheckRun --> RunChecks["RunChecks<br/>(health.go)"]
     CheckRun --> RecordScan["RecordScan<br/>(scan-store.go)"]
-    CheckRun --> Report["WriteOutcomesText / JSON<br/>ExitCodeFor (report.go)"]
+    CheckRun --> Report["writeReport: text / JSON / Nagios /<br/>Prometheus / JUnit; --fail-on<br/>(report.go, report-formats.go)"]
+    Report -. "--output" .-> OutFile[("report file<br/>temp + rename")]
+    CheckRun -. "--retain" .-> PruneScanJobs
     CheckList --> ListFeatures
     JobsList --> ListScanJobs
     JobsShow --> GetScanJob
     JobsPrune --> PruneScanJobs["PruneScanJobs<br/>(one transaction)"]
+    JobsDiff --> GetScanJob
+    JobsDiff --> Diff["diffResults<br/>(scan-history.go)"]
+    JobsStats --> ScanStats["ScanStats<br/>(scan-history.go)"]
 
-    RunChecks --> Resources["disk / memory / cpu / uptime<br/>(/proc, statfs — Linux only)"]
-    RunChecks --> Exec["exec.CommandContext<br/>docker · kubectl · systemctl"]
-    RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket, PATH)"]
+    RunChecks --> Targets["checkTargets: one run per<br/>--disk-path / --service / --cert"]
+    RunChecks --> Resources["disk space + inodes / memory /<br/>cpu / uptime<br/>(/proc, statfs — Linux only)"]
+    RunChecks --> Exec["exec.CommandContext<br/>docker · kubectl · systemctl · timedatectl"]
+    RunChecks --> Files["--cert files (crypto/x509)"]
+    RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket and TCP, PATH,<br/>sshd_config)"]
 
     NewDatabase --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)")]
     Seed --> SQLite
@@ -103,6 +125,7 @@ flowchart LR
     ListScanJobs --> SQLite
     GetScanJob --> SQLite
     PruneScanJobs --> SQLite
+    ScanStats --> SQLite
 ```
 
 ## `check run` data flow
@@ -116,23 +139,26 @@ sequenceDiagram
     participant S as RecordScan
     participant DB as SQLite
 
-    U->>CLI: salus check run [--only ...] [--json] [thresholds, --timeout]
-    CLI->>CLI: validate --only keys and threshold/timeout flags (exit 3 on error)
+    U->>CLI: salus check run [--only ...] [targets] [--format/--output] [--fail-on] [--retain]
+    CLI->>CLI: validate --only keys, format, --fail-on, thresholds, --retain, cert targets (exit 3 on error)
     opt without --no-save
         CLI->>DB: open database (created 0600 if missing)
     end
     CLI->>C: keys, CheckOptions
-    loop each check key (sequential)
-        C->>H: read /proc or run CLI (--timeout, default 3s)
+    loop each check key (sequential), once per target for targeted checks
+        C->>H: read /proc, statfs, or a file, or run a CLI (--timeout, default 3s)
         H-->>C: data or error
     end
     C-->>CLI: []CheckOutcome
     alt without --no-save
         CLI->>S: startedAt, outcomes
         S->>DB: one transaction: insert ScanJob, N × ScanResult, mark completed
+        opt --retain
+            CLI->>DB: PruneScanJobs (cutoff never after this run's start)
+        end
     end
-    CLI-->>U: text or JSON report
-    CLI-->>U: nil or *ExitStatusError → main.run returns exit 0 | 1 | 2 (3 on errors)
+    CLI-->>U: report in --format, to stdout or atomically to --output
+    CLI-->>U: nil or *ExitStatusError → main.run returns exit 0 | 1 | 2 after --fail-on (3 on errors)
 ```
 
 ## Data model
@@ -167,8 +193,11 @@ erDiagram
         uint ScanJobID FK
         uint FeatureID FK
         string Key
+        string Target "M6, default empty"
         string Status "PASS|WARN|FAIL"
         string Message
+        float64 Value "M6, nullable"
+        string Unit "M6, default empty"
         int64 DurationMs
         time CreatedAt
     }
@@ -188,4 +217,8 @@ erDiagram
 | `github.com/jinzhu/now` | v1.1.5 | Indirect, via gorm |
 | `golang.org/x/text` | v0.41.0 | Indirect, via gorm |
 
-Runtime tools invoked when present: `docker`, `kubectl`, `systemctl`.
+Runtime tools invoked when present: `docker`, `kubectl`, `systemctl`,
+`timedatectl`. Files read when present or given: `/proc/*`, `/proc/self/mounts`,
+`--cert` files, and `sshd_config` with its includes. M6 added no module
+dependency (`encoding/xml`, `crypto/x509`, `encoding/pem`, and `text/tabwriter`
+are standard library).

@@ -82,8 +82,8 @@ func unsetEnv(t *testing.T, key string) {
 
 // isolateMisconfigEnv gives the misconfig check a clean, passing environment:
 // no SALUS_DB_PATH, a per-user default database location in a temp dir that
-// does not exist yet, no kubeconfig or Docker socket, and a PATH holding only
-// an owner-only directory.
+// does not exist yet, no kubeconfig or Docker socket, a PATH holding only an
+// owner-only directory, and no sshd_config.
 func isolateMisconfigEnv(t *testing.T) {
 	t.Helper()
 
@@ -95,7 +95,9 @@ func isolateMisconfigEnv(t *testing.T) {
 	}
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing-kubeconfig"))
 	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(t.TempDir(), "missing-docker.sock"))
+	t.Setenv("DOCKER_TLS_VERIFY", "")
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv(SSHDConfigEnv, filepath.Join(t.TempDir(), "missing-sshd_config"))
 }
 
 // fileWithMode creates path (with its directory) and sets its permission bits
@@ -349,6 +351,42 @@ func TestCheckKubernetesStatus(t *testing.T) {
 			}},
 			wantStatus:  StatusPass,
 			wantMessage: "kubernetes cluster reachable; node readiness not checked (listing nodes is forbidden)",
+		},
+		{
+			name:      "nodes under pressure",
+			installed: []string{"kubectl"},
+			results: map[string]fakeResult{clusterInfo: reachable, getNodes: {
+				out: "node-1\tTrue\tFalse\tFalse\tFalse\nnode-2\tTrue\tTrue\tFalse\tFalse\nnode-3\tTrue\tFalse\tTrue\tTrue\n",
+			}},
+			wantStatus:  StatusWarn,
+			wantMessage: "kubernetes cluster reachable; 3/3 nodes Ready; under pressure: node-2 (MemoryPressure), node-3 (DiskPressure, PIDPressure)",
+		},
+		{
+			name:      "NotReady and under pressure",
+			installed: []string{"kubectl"},
+			results: map[string]fakeResult{clusterInfo: reachable, getNodes: {
+				out: "node-1\tTrue\tFalse\tFalse\tFalse\nnode-2\tFalse\tFalse\tTrue\tFalse\n",
+			}},
+			wantStatus:  StatusWarn,
+			wantMessage: "kubernetes cluster reachable; 1/2 nodes Ready; NotReady: node-2; under pressure: node-2 (DiskPressure)",
+		},
+		{
+			name:      "no node Ready and under pressure",
+			installed: []string{"kubectl"},
+			results: map[string]fakeResult{clusterInfo: reachable, getNodes: {
+				out: "node-1\tFalse\tTrue\tFalse\tFalse\n",
+			}},
+			wantStatus:  StatusFail,
+			wantMessage: "kubernetes cluster reachable, but no nodes are Ready (0/1); NotReady: node-1; under pressure: node-1 (MemoryPressure)",
+		},
+		{
+			name:      "pressure conditions False or missing",
+			installed: []string{"kubectl"},
+			results: map[string]fakeResult{clusterInfo: reachable, getNodes: {
+				out: "node-1\tTrue\tFalse\tFalse\tFalse\nnode-2\tTrue\t\t\t\nnode-3\tTrue\tUnknown\n",
+			}},
+			wantStatus:  StatusPass,
+			wantMessage: "kubernetes cluster reachable; 3/3 nodes Ready",
 		},
 		{
 			name:      "log line containing a tab is not a node",
@@ -667,6 +705,7 @@ func TestCheckMisconfigurationDockerSocketPermissions(t *testing.T) {
 	t.Run("remote daemon", func(t *testing.T) {
 		isolateMisconfigEnv(t)
 		t.Setenv("DOCKER_HOST", "tcp://docker.example.invalid:2376")
+		t.Setenv("DOCKER_TLS_VERIFY", "1") // docker-tcp-insecure is tested separately
 
 		assertOutcome(t, checkMisconfiguration(CheckOptions{}), keyMisconfig, StatusPass, "no common misconfigurations detected")
 	})
@@ -744,11 +783,22 @@ func TestCheckMisconfigurationReportsEveryRuleInOrder(t *testing.T) {
 		t.Fatalf("chmod %s: %v", open, err)
 	}
 	t.Setenv("PATH", open)
+	t.Setenv("DOCKER_HOST", "tcp://docker.internal:2375")
+	sshdConfig := filepath.Join(t.TempDir(), "sshd_config")
+	if err := os.WriteFile(sshdConfig, []byte("PermitRootLogin yes\n"), 0o600); err != nil {
+		t.Fatalf("write sshd_config: %v", err)
+	}
+	t.Setenv(SSHDConfigEnv, sshdConfig)
 
 	want := "home-unset: HOME environment variable is not set; " +
 		"db-permissions: " + db + " is accessible by group/other (mode 0644, want 0600; run chmod 600 on it); " +
-		"path-world-writable: PATH directories writable by all users: " + open + " (mode 0777)"
-	assertOutcome(t, checkMisconfiguration(CheckOptions{}), keyMisconfig, StatusWarn, want)
+		"path-world-writable: PATH directories writable by all users: " + open + " (mode 0777); " +
+		"docker-tcp-insecure: DOCKER_HOST uses tcp://docker.internal:2375 without TLS verification (set DOCKER_TLS_VERIFY=1 and DOCKER_CERT_PATH, or use ssh:// or a unix socket); " +
+		"sshd-root-login: " + sshdConfig + " permits root login with any authentication method (PermitRootLogin yes; use prohibit-password or no); " +
+		"sshd-password-auth: " + sshdConfig + " does not set PasswordAuthentication, which OpenSSH enables by default (set PasswordAuthentication no)"
+	got := checkMisconfiguration(CheckOptions{})
+	assertOutcome(t, got, keyMisconfig, StatusWarn, want)
+	assertCount(t, got, 6)
 }
 
 func TestValidUnitName(t *testing.T) {

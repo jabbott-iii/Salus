@@ -21,20 +21,24 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/jabbott-iii/Salus/internal"
 )
 
-// isolateHostEnv hides the host's kubeconfig, Docker socket, and PATH from the
-// misconfig check, so it passes regardless of the machine running the tests.
+// isolateHostEnv hides the host's kubeconfig, Docker endpoint, PATH, and
+// sshd_config from the misconfig check, so it passes regardless of the
+// machine running the tests.
 func isolateHostEnv(t *testing.T) {
 	t.Helper()
 
 	t.Setenv("KUBECONFIG", filepath.Join(t.TempDir(), "missing-kubeconfig"))
 	t.Setenv("DOCKER_HOST", "unix://"+filepath.Join(t.TempDir(), "missing-docker.sock"))
+	t.Setenv("DOCKER_TLS_VERIFY", "")
 	t.Setenv("PATH", t.TempDir())
+	t.Setenv(internal.SSHDConfigEnv, filepath.Join(t.TempDir(), "missing-sshd_config"))
 }
 
 // useTempDatabase points SALUS_DB_PATH at an owner-only file in a temp dir so
@@ -74,6 +78,13 @@ func TestRunExitCodes(t *testing.T) {
 		{name: "extra argument", args: []string{"check", "run", "extra"}, want: internal.ExitCodeError, wantStderr: `unknown command "extra" for "salus check run"`},
 		{name: "invalid job id", args: []string{"jobs", "show", "abc"}, want: internal.ExitCodeError, wantStderr: `invalid job id "abc"`},
 		{name: "missing job", args: []string{"jobs", "show", "999"}, want: internal.ExitCodeError, wantStderr: "scan job 999: record not found"},
+		{name: "nagios format", args: []string{"check", "run", "--only", "misconfig", "--format", "nagios"}, want: internal.ExitCodePass, wantStdout: "SALUS OK - 1 checks: 1 pass, 0 warn, 0 fail | 'misconfig'=0\n"},
+		{name: "invalid format", args: []string{"check", "run", "--format", "yaml"}, want: internal.ExitCodeError, wantStderr: `invalid --format value "yaml"`},
+		{name: "invalid fail-on", args: []string{"check", "run", "--fail-on", "never"}, want: internal.ExitCodeError, wantStderr: `invalid --fail-on value "never"`},
+		{name: "cert-expiry without a file", args: []string{"check", "run", "--only", "cert-expiry"}, want: internal.ExitCodeError, wantStderr: "cert-expiry needs at least one --cert file"},
+		{name: "jobs diff without runs", args: []string{"jobs", "diff"}, want: internal.ExitCodeError, wantStderr: "jobs diff needs two recorded runs; found 0"},
+		{name: "jobs stats", args: []string{"jobs", "stats"}, want: internal.ExitCodePass, wantStdout: "Runs since "},
+		{name: "invalid stats age", args: []string{"jobs", "stats", "--since", "later"}, want: internal.ExitCodeError, wantStderr: `invalid --since value "later"`},
 	}
 
 	for _, tt := range tests {
@@ -137,10 +148,17 @@ func TestRunOpensDatabaseOnlyWhenNeeded(t *testing.T) {
 		{"check"},
 		{"completion", "bash"},
 		{"check", "run", "--only", "misconfig", "--no-save", "--quiet"},
+		{"check", "run", "--only", "misconfig", "--no-save", "--format", "junit"},
+		{"jobs", "stats", "--since", "never"},
+		{"check", "run", "--retain", "30d", "--no-save"},
 	} {
+		wantCode := internal.ExitCodePass
+		if slices.Contains(args, "stats") || slices.Contains(args, "--retain") {
+			wantCode = internal.ExitCodeError // rejected before the database opens
+		}
 		var stdout, stderr bytes.Buffer
-		if got := run(args, &stdout, &stderr); got != internal.ExitCodePass {
-			t.Fatalf("run(%q) = %d, want 0 (stderr: %s)", args, got, stderr.String())
+		if got := run(args, &stdout, &stderr); got != wantCode {
+			t.Fatalf("run(%q) = %d, want %d (stderr: %s)", args, got, wantCode, stderr.String())
 		}
 		if _, err := os.Stat(filepath.Dir(path)); !os.IsNotExist(err) {
 			t.Fatalf("run(%q) created %s (stat error %v), want no database", args, filepath.Dir(path), err)
@@ -182,5 +200,33 @@ func TestRunDatabaseInitFailureIsOperationalError(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "failed to initialize database") {
 		t.Errorf("stderr = %q, want a database initialization error", stderr.String())
+	}
+}
+
+func TestRunJobsDiffExitCode(t *testing.T) {
+	useTempDatabase(t)
+	var stdout, stderr bytes.Buffer
+	for i := 0; i < 2; i++ {
+		if got := run([]string{"check", "run", "--only", "misconfig", "--quiet"}, &stdout, &stderr); got != internal.ExitCodePass {
+			t.Fatalf("check run exit code = %d (stderr: %s)", got, stderr.String())
+		}
+	}
+	if got := run([]string{"jobs", "diff", "--exit-code"}, &stdout, &stderr); got != internal.ExitCodePass {
+		t.Fatalf("jobs diff --exit-code without changes = %d, want 0 (stderr: %s)", got, stderr.String())
+	}
+
+	// A run with another check is a change; --exit-code reports it as 1 and
+	// prints no error.
+	// The disk-space status depends on the host; only its presence matters.
+	if got := run([]string{"check", "run", "--only", "misconfig,disk-space", "--disk-path", t.TempDir(), "--quiet"}, &stdout, &stderr); got == internal.ExitCodeError {
+		t.Fatalf("check run exit code = %d (stderr: %s)", got, stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if got := run([]string{"jobs", "diff", "--exit-code"}, &stdout, &stderr); got != 1 {
+		t.Fatalf("jobs diff --exit-code with changes = %d, want 1 (stderr: %s)", got, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "[added ") || stderr.Len() != 0 {
+		t.Errorf("stdout = %q, stderr = %q; want the added result and no error", stdout.String(), stderr.String())
 	}
 }

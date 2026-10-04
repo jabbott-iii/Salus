@@ -7,15 +7,17 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-09-28 (against `5827c8f` plus the uncommitted M5 changes:
-P3-2 to P3-6 and P5-2).
+Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes,
+P6-1 to P6-12).
 
 ## 1. Purpose and scope
 
 Salus is a single-binary Go CLI that runs local environment health checks
-(disk, memory, CPU load, Docker, Kubernetes, service uptime, common
-misconfigurations), prints a PASS/WARN/FAIL report, and records each run as a
-job in a local SQLite database.
+(disk space and inodes, memory, CPU load, Docker, Kubernetes nodes and pods,
+service uptime, failed systemd units, time sync, certificate expiry, common
+misconfigurations), prints a PASS/WARN/FAIL report (text, JSON, Nagios,
+Prometheus, or JUnit), and records each run as a job in a local SQLite
+database.
 
 Salus is a command-line tool only. No TUI is planned (Q-001). It has no
 network listener, no HTTP API, and no authentication layer. The
@@ -27,10 +29,10 @@ HTTP interface is ever added.
 | Layer | Files | Responsibility |
 |---|---|---|
 | Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`) and flag parsing. `check run` validates its threshold and timeout flags (`validateLimits`) and returns `*ExitStatusError` for WARN/FAIL. `jobs prune` parses `--older-than` with `parseAge`. |
-| Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go` | Check registry, thresholds, and the individual check functions. |
-| Reporting | `internal/report.go` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
-| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, and pruning. |
+| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`) and flag parsing. `check run` validates every flag (`validateLimits`, `parseFailOn`, the format, `--retain`, and the `cert-expiry` target rule) before opening the database, applies `--fail-on` (`exitCodeWithFailOn`), prunes for `--retain`, routes the report to stdout or `--output`, and returns `*ExitStatusError` for a non-zero result. `jobs prune`, `jobs stats --since`, and `check run --retain` parse ages with `parseAge`. |
+| Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go`, `internal/health-systemd.go`, `internal/health-pods.go`, `internal/health-certs.go`, `internal/health-sshd.go` | Check registry and per-target expansion (`checkTargets`), thresholds, and the individual check functions. |
+| Reporting | `internal/report.go`, `internal/report-formats.go` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), Nagios, Prometheus, and JUnit rendering (`writeReport`), atomic `--output` files (`writeFileAtomic`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
+| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/scan-history.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, pruning, run comparison (`diffResults`), and statistics (`ScanStats`). |
 
 All application code lives in the single package
 `github.com/jabbott-iii/Salus/internal`. Dependency direction today is:
@@ -46,11 +48,15 @@ check reads. `DatabasePathEnv` and `DefaultDatabasePath` are defined once in
 2. `EnsureDefaultFeatures` idempotently seeds `FeatureCategory` and `Feature`
    rows from the compiled-in catalog in `seed.go`.
 3. `check run` calls `RunChecks`, which executes checks sequentially in
-   `AllCheckKeys` order (or the `--only` order).
+   `AllCheckKeys` order (or the `--only` order). A check listed in
+   `checkTargets` runs once per target (mount path, service, or certificate
+   file), in target order.
 4. Unless `--no-save` is set, `RecordScan` persists one `ScanJob` and one
-   `ScanResult` per outcome in a single transaction.
-5. Output is written as text or JSON (nothing with `--quiet`). A WARN or
-   FAIL result is returned as `*ExitStatusError`. `main.run` closes the
+   `ScanResult` per outcome in a single transaction. With `--retain`,
+   `PruneScanJobs` then removes older runs (never the one just recorded).
+5. The report is rendered in the `--format` (text by default) to stdout, to
+   the `--output` file, or nowhere with `--quiet`. A non-zero result after
+   `--fail-on` is returned as `*ExitStatusError`. `main.run` closes the
    database and returns the exit code (0/1/2, or 3 for operational errors).
 
 ## 3. Public contracts (treat as compatibility surface)
@@ -62,24 +68,77 @@ authorization plus README and `history.md` updates:
   `--version` flag (output `salus version <version>`, where `<version>` is
   `dev` unless set with `-ldflags "-X main.version=..."`).
 - **`check run` thresholds and timeout:** `--disk-warn`/`--disk-fail`
-  (defaults 80/90), `--mem-warn`/`--mem-fail` (80/90), and
-  `--load-warn`/`--load-fail` (80/100, per-CPU load in percent) are
-  percentages. `--timeout` (default 3s) bounds each external command. The
-  defaults are the `default*` constants in `health.go`. `validateLimits`
-  rejects NaN, infinite, zero, or negative thresholds, disk and memory values
-  above 100, a WARN value that is not below its FAIL value, and a timeout that
-  is not positive. It runs before the database opens or any check runs.
+  (defaults 80/90), `--inode-warn`/`--inode-fail` (80/90),
+  `--mem-warn`/`--mem-fail` (80/90), and `--load-warn`/`--load-fail` (80/100,
+  per-CPU load in percent) are percentages. `--cert-warn-days` (default 30) is
+  a positive whole number. `--timeout` (default 3s) bounds each external
+  command. The defaults are the `default*` constants in `health.go`.
+  `validateLimits` rejects NaN, infinite, zero, or negative thresholds, disk,
+  inode, and memory values above 100, a WARN value that is not below its FAIL
+  value, a timeout that is not positive, and non-positive certificate days.
+  It runs before the database opens or any check runs.
+- **`check run` targets (M6):** `--disk-path` (string array, default `/`;
+  commas belong to the path), `--service` (string slice: repeat or
+  comma-separate), and `--cert` (string array) make their checks run once per
+  value, in order, with duplicates run once. `disk-space` and `disk-inodes`
+  share `--disk-path`. `cert-expiry` runs only with at least one `--cert`: a
+  default run skips it, and `--only cert-expiry` without `--cert` exits 3.
+  `--kube-namespace` must pass `validNamespace` (an RFC 1123 label) and is
+  passed as the single argument `--namespace=<name>`.
+- **`check run` reporting (M6):** `--format text|json|nagios|prometheus|junit`
+  (default text); `--json` equals `--format json`, and `--json` with any
+  other explicit `--format` exits 3. `--output <file>` writes the report via
+  `writeFileAtomic` (temp file in the same directory named `.<name>.*.tmp`,
+  then rename; a new file is `0600`, an existing regular file keeps its
+  mode and, where the user may set it, its group (`keepGroup`); a
+  non-regular target, including a symbolic link, exits 3). `--quiet` suppresses stdout only.
+  `--fail-only` applies to text and Nagios detail lines. `--fail-on warn|fail`
+  (default `warn`): with `fail`, a WARN-only run exits 0. `--retain <age>`
+  prunes after the report is written (so a prune failure, exit 3, still
+  leaves the report), never past the current run's start, and exits 3 with
+  `--no-save`. `checkOutputPath` rejects an `--output` whose directory is
+  missing or whose existing entry is not a regular file (including a
+  symbolic link) before the database opens. `RunChecks` runs a key repeated
+  in `--only` once.
+- **Output format details (M6):**
+  - Nagios: first line `SALUS <OK|WARNING|CRITICAL|UNKNOWN> - <n> checks:
+    <p> pass, <w> warn, <f> fail`, with ` | ` and performance data
+    `'<key>[ <target>]'=<value rounded to 2 decimals><%|s|>` for each outcome
+    with a value (`'` doubled, `=` and `|` replaced in labels); the state is
+    taken from the exit code after `--fail-on`. Then one
+    `[<STATUS>] <key>: <message>` line per outcome, with `|` replaced by `/`.
+  - Prometheus: `salus_check_status{key,target}` (0/1/2, ignoring
+    `--fail-on`), `salus_check_value{key,target,unit}`,
+    `salus_check_duration_seconds{key,target}`, and
+    `salus_last_run_timestamp_seconds` (finish time, milliseconds). Label
+    values escape `\`, `"`, and newlines. Messages are never labels.
+  - JUnit: one `<testsuites>` with one `<testsuite name="salus check run">`;
+    test case `name` is `<key>[ <target>]` and `classname` `salus.<key>`.
+    FAIL is a `<failure type="FAIL">`; WARN is a `<failure type="WARN">`
+    with `--fail-on warn`, otherwise `<system-out>WARN: …`.
+  - Metric names, labels, units, and the Nagios line layout are a contract
+    for dashboards and alert rules; change them only as a breaking change.
 - **Exit codes:** `check run` exits `0` all PASS, `1` any WARN, `2` any FAIL
-  (`ExitCodeFor`). Every command exits `3` (`ExitCodeError`) for operational
-  errors: Cobra flag/argument errors, invalid threshold or timeout values,
-  unknown `--only` keys, missing jobs, and database failures (Q-004).
-  `check run` returns `*ExitStatusError` for WARN and FAIL, and `main.run`
-  maps any returned error with `ExitCode`. Only `main` calls `os.Exit`.
+  (`ExitCodeFor`); with `--fail-on fail`, WARN exits `0`
+  (`exitCodeWithFailOn`). Every command exits `3` (`ExitCodeError`) for
+  operational errors: Cobra flag/argument errors, invalid flag values,
+  unknown `--only` keys, missing jobs, too few runs for `jobs diff`, an
+  unwritable `--output`, and database failures (Q-004). `jobs diff
+  --exit-code` exits `1` when anything changed. Commands return
+  `*ExitStatusError` for these non-zero results, and `main.run` maps any
+  returned error with `ExitCode`. Only `main` calls `os.Exit`.
 - **Check keys:** `disk-space`, `memory`, `cpu-load`, `docker-status`,
-  `kubernetes-status`, `service-uptime`, `misconfig`. Keys are stored in the
-  database and accepted by `--only`; never rename a key without a migration.
+  `kubernetes-status`, `service-uptime`, `misconfig`, then (M6)
+  `disk-inodes`, `kubernetes-pods`, `systemd-failed`, `time-sync`, and
+  `cert-expiry`, in that `AllCheckKeys` order. New keys are appended, so the
+  positions of earlier checks in `--json` output do not move. Keys are stored
+  in the database and accepted by `--only`; never rename a key without a
+  migration.
 - **JSON output shape:** an array of objects with `key`, `status`, `message`,
-  and `duration_ns` (nanoseconds, from `time.Duration`).
+  and `duration_ns` (nanoseconds, from `time.Duration`), plus optional `target`
+  (targeted checks), `value`, and `unit` (`percent`, `seconds`, `days`, or
+  `count`; the `unit*` constants in `health.go`). Optional fields are omitted
+  when empty; `value` is a pointer so that `0` is still printed.
 - **`--quiet`** suppresses `check run` report output, including `--json`, and
   still sets the exit code.
 - **Output streams:** stdout carries only command output (reports, JSON, help,
@@ -91,6 +150,9 @@ authorization plus README and `history.md` updates:
   `runGroup`, which rejects unknown subcommands (with suggestions) instead of
   printing help and exiting 0. Leaf commands declare `Args` (`cobra.NoArgs`,
   `cobra.ExactArgs(1)`).
+- **Environment variable:** `SALUS_SSHD_CONFIG` (`SSHDConfigEnv`, M6)
+  overrides the sshd_config that the `sshd-*` rules read (default
+  `/etc/ssh/sshd_config`, or `%ProgramData%\ssh\sshd_config` on Windows).
 - **Environment variable:** `SALUS_DB_PATH` overrides the database path. The
   default is per-user (Q-002, since v1.0.1; v1.0.0 used
   `./salus.db`): `$XDG_DATA_HOME/salus/salus.db` or
@@ -109,7 +171,8 @@ authorization plus README and `history.md` updates:
   `kubernetes-status` without running `kubectl`. A valid name is passed as
   one `--context=<name>` argument, never as a separate value, so it cannot
   become another option.
-- **Check result semantics** (P3-2, P3-3, decided 2026-09-28):
+- **Check result semantics** (P3-2, P3-3, decided 2026-09-28; M6 rows
+  decided 2026-10-03, Q-012 to Q-014):
   - `docker-status` reports WARN when containers are unhealthy or restarting,
     and FAIL only for an unreachable daemon.
   - `kubernetes-status` reports WARN when some nodes are NotReady, and FAIL
@@ -119,12 +182,28 @@ authorization plus README and `history.md` updates:
     Services and fails for namespace-scoped users, and to the node listing.
     When listing nodes is forbidden, `kubernetes-status` stays PASS with a
     note.
+  - `kubernetes-status` also reports WARN for nodes with a True
+    MemoryPressure, DiskPressure, or PIDPressure condition, appended to the
+    message as `; under pressure: <node> (<conditions>)`.
+  - `kubernetes-pods` reports WARN for pods in CrashLoopBackOff, Failed, or
+    not Ready (completed pods are ignored), PASS with a note when listing
+    pods is forbidden, WARN when the listing fails otherwise, and FAIL only
+    for an invalid namespace or context.
+  - `systemd-failed` reports WARN for failed units, and WARN when systemd is
+    not running. `time-sync` reports WARN when `NTPSynchronized` is not
+    `yes`.
+  - `cert-expiry` reports the certificate in the file that expires first:
+    FAIL if expired or not yet valid, or if the file cannot be read, is over
+    1 MiB, or has no certificate; WARN within `--cert-warn-days`.
+  - `disk-inodes` reports PASS with a note for a filesystem that reports no
+    inode count.
   - The README table "What each check reports" must match the code.
 - **`misconfig` rule identifiers:** `home-unset`, `db-permissions`,
-  `kubeconfig-permissions`, `docker-socket-permissions`, and
-  `path-world-writable`, in that order (`misconfigRules`). Each problem is
+  `kubeconfig-permissions`, `docker-socket-permissions`,
+  `path-world-writable`, then (M6) `docker-tcp-insecure`, `sshd-root-login`,
+  and `sshd-password-auth`, in that order (`misconfigRules`). Each problem is
   reported as `<id>: <details>`, and problems are joined with `; `. Never
-  rename or reuse an id.
+  rename or reuse an id. The `value` of `misconfig` is the problem count.
 - **Job JSON (`jobs list --json`, `jobs show --json`):**
   - A job object has `id`, `status`, `started_at`, `finished_at` (null if
     unfinished), and `summary`.
@@ -138,8 +217,24 @@ authorization plus README and `history.md` updates:
     their results.
   - `--dry-run` only counts them.
   - A missing or invalid age exits 3 before the database opens.
+- **`jobs diff [from-id] [to-id]`** (M6): matches results by (key, target);
+  no ids means the two most recent runs, one id means that run and the most
+  recent (exit 3 if it is the most recent). A result stored before M6
+  without a target matches the counterpart with a target when the check has
+  one result in each run and the old message contains the target
+  (`legacyMatch`); `jobs stats` folds such rows the same way. Text: a summary line, then `[<FROM> -> <TO>]`, `[added <TO>]`, or
+  `[removed <FROM>]` lines with the key and message. `--json`: `from`, `to`
+  (job objects), `changes` (`key`, optional `target`, `change` =
+  `worse|better|added|removed`, `from` (absent for `added`), `to` (absent
+  for `removed`), `message`), and `unchanged`.
+- **`jobs stats`** (M6): `--since <age>` (default 7d) and `--flap-threshold`
+  (default 3, positive). Per (key, target): `runs`, `pass`, `warn`, `fail`,
+  `changes` (between consecutive runs that include it), `last_status`, and
+  `flapping` (changes ≥ threshold), sorted by key and target. `--json` adds
+  `since` and `runs` at the top level; an empty window prints `"checks": []`.
 - **Database schema:** tables for `FeatureCategory`, `Feature`, `ScanJob`,
-  `ScanResult` managed by GORM `AutoMigrate`.
+  `ScanResult` managed by GORM `AutoMigrate`. `ScanResult.Target` and `Unit`
+  (`NOT NULL DEFAULT ''`) and `Value` (nullable) were added in M6.
 
 ## 4. Conventions
 
@@ -168,6 +263,14 @@ authorization plus README and `history.md` updates:
 - Use `StatusWarn` when a check cannot run on this host (tool missing,
   unsupported OS) and `StatusFail` when the thing being checked is unhealthy
   or unreachable.
+- A check that can examine several things (mount paths, services,
+  certificate files) still examines one per call. List it in `checkTargets`
+  with a `targets` function (de-duplicated, ordered; returning none skips the
+  check) and a `bind` function that sets the singular `CheckOptions` field.
+  `RunChecks` sets `Target` (sanitized) on each outcome, and the message must
+  still name the target, because text output prints only the key.
+- When a status is decided from one number, attach it with `withValue` and a
+  `unit*` constant. Outcomes that measure nothing carry no value.
 - External tools are run only through `opts.hasTool` and `opts.command`,
   which wrap `exec.LookPath` and `exec.CommandContext` with
   `opts.commandTimeout()` (default 3s). Arguments are passed separately with
@@ -199,7 +302,20 @@ authorization plus README and `history.md` updates:
   where the mode bits are made up.
 - Platform-specific logic uses `_linux.go` / `_other.go` files with matching
   build constraints, and every platform must define every function the
-  registry references.
+  registry references. Checks that need systemd tools (`systemd-failed`,
+  `time-sync`) instead test `runtime.GOOS` at run time, like
+  `service-uptime`, and report WARN off Linux.
+- Files that checks read on the user's behalf (`--cert`, sshd_config and its
+  includes) are opened read-only, only if they are regular files (a FIFO would
+  block), and never echoed: messages carry only metadata (paths, subject
+  names, dates, fixed keyword values). `--cert` files are also bounded
+  (`maxCertFileSize`); sshd_config is read line by line. The sshd rules report
+  nothing unless they could read the whole effective configuration, so an
+  unreadable or unresolvable include never produces a false warning. They
+  follow sshd: first value wins, `Include` in place (glob order, no dotfiles),
+  `Match` blocks skipped until `Match all`, and, for a `SALUS_SSHD_CONFIG`
+  outside `/etc/ssh`, absolute includes under `/etc/ssh/` read from the
+  configuration's directory.
 - Threshold and timeout defaults are constants in `health.go`, because
   `check run` uses them as flag defaults on every platform. The threshold
   accessors and `orDefault` live in `health-thresholds.go`. Zero or negative
@@ -213,8 +329,10 @@ authorization plus README and `history.md` updates:
   2026-09-27). Lint for all three targets (see section 6).
 
 ### Adding a new check (checklist)
-1. Add a `key...` constant and append it to `AllCheckKeys` in `health.go`.
-2. Implement the check and register it in `checkRegistry`.
+1. Add a `key...` constant and append it to the end of `AllCheckKeys` in
+   `health.go`.
+2. Implement the check and register it in `checkRegistry` (and in
+   `checkTargets` if it runs per target).
 3. Add a `defaultFeature` entry (and category, if new) in `seed.go`. Without
    this, `RecordScan` fails with `ErrNotFound` for the new key.
 4. Add unit tests that do not depend on ambient host state (use fixtures or
@@ -241,7 +359,17 @@ authorization plus README and `history.md` updates:
   `databaseFile`, which mirrors go-sqlite3's handling of `?` parameters and
   skips `:memory:` and `file:` URIs; the `misconfig` check uses the same
   helper.
-- Stored result messages are capped at 1024 bytes (`truncateMessage`).
+- Stored result messages and targets are capped at 1024 bytes
+  (`truncateMessage`). `RecordScan` caches feature lookups per key within its
+  transaction, because targeted checks repeat keys.
+- Adding columns or catalog rows needs one write to an existing database:
+  the first command after an upgrade runs `AutoMigrate` and seeds new
+  features. A read-only database from an older version cannot be opened until
+  that has happened once (README "Upgrading from 1.0.2"). Columns added later
+  must have a default (or be nullable) so that `ALTER TABLE ADD COLUMN`
+  succeeds on existing rows.
+- `jobs stats` selects runs with `julianday(started_at) >= julianday(?)`
+  (`startedSince`), for the same reason as `startedBefore`.
 - `PruneScanJobs` deletes results explicitly, because the schema has no
   foreign key from results to jobs. It selects jobs with a subquery, which
   avoids SQLite's limit on bound variables. It compares times with
@@ -271,8 +399,8 @@ authorization plus README and `history.md` updates:
 - **CGO is required.** `gorm.io/driver/sqlite` uses `github.com/mattn/go-sqlite3`.
   A `CGO_ENABLED=0` build compiles but cannot open the database at runtime.
   Every build needs a C toolchain.
-- **Resource checks are Linux-only today.** Disk, memory, CPU load, and host
-  uptime read `/proc` and `statfs`. On other platforms they return `WARN`, so
+- **Resource checks are Linux-only today.** Disk space and inodes, memory, CPU
+  load, and host uptime read `/proc` and `statfs`. On other platforms they return `WARN`, so
   `check run` exits `1` on macOS and Windows. macOS and Windows
   implementations are approved (Q-005, `plan.md` P3-7). Prefer the standard
   library `syscall` package. Adding `golang.org/x/sys` requires a recorded
@@ -296,9 +424,16 @@ authorization plus README and `history.md` updates:
   contents (`internal/health-resources_linux_test.go`).
 - Tests that read environment-dependent checks (`misconfig`) call
   `isolateMisconfigEnv`. It also points `KUBECONFIG` and `DOCKER_HOST` at
-  missing files and `PATH` at an owner-only directory. Tests in package
-  `main` use `isolateHostEnv`. OS-specific expectations use `runtime.GOOS` with
-  `t.Skip`, never silent passes.
+  missing files, clears `DOCKER_TLS_VERIFY`, points `PATH` at an owner-only
+  directory, and points `SALUS_SSHD_CONFIG` at a missing file. Tests in
+  package `main` use `isolateHostEnv`, which does the same for the host's
+  kubeconfig, Docker endpoint, `PATH`, and sshd_config. OS-specific
+  expectations use `runtime.GOOS` with `t.Skip`, never silent passes. Tests
+  that make files unreadable skip when run as root; run the suite as a
+  normal user (as CI does) to exercise them.
+- Certificate tests generate certificates in the test (`testCertDER`);
+  sshd tests write configuration trees with `sshdFixture`. Report formats
+  have golden-output tests in `report-formats_test.go`.
 - Commands are tested through `Execute()` with injected writers and
   arguments. `newCheckRunCmdWith` also takes the function that runs the
   checks, so tests can assert the `CheckOptions` built from flags without
