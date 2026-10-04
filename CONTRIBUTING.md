@@ -131,7 +131,9 @@ Update documentation in the same pull request when your change affects it:
 
 - `README.md` for user-visible commands, flags, behavior, or installation.
 - `intel/map.md` when files, components, dependencies, or data flows change.
-- `intel/cybersec.md` when you find or fix a security issue. Never delete
+- `intel/cybersec.md` when you fix a security issue that is already public.
+  Report an undisclosed vulnerability privately first (see `SECURITY.md`); it
+  is recorded in `cybersec.md` when its advisory is published. Never delete
   existing items.
 - `intel/history.md` for significant changes. Append only.
 - `intel/plan.md` and `intel/notes.md` when work items or open questions
@@ -154,9 +156,11 @@ points:
 
 ## Security issues
 
-Do not report vulnerabilities in public issues. Contact the code owner
-(`@jabbott-iii`, see `CODEOWNERS`) privately. Known issues and remediation
-status are tracked in [`intel/cybersec.md`](intel/cybersec.md).
+Do not report vulnerabilities in public issues or pull requests. Report them
+privately through GitHub's private vulnerability reporting, as described in
+[`SECURITY.md`](SECURITY.md), which also lists the supported versions and
+what is in scope. Known issues and remediation status are tracked in
+[`intel/cybersec.md`](intel/cybersec.md).
 
 ## Releases
 

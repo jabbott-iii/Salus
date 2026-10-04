@@ -731,3 +731,55 @@ reconstructed from commit messages and diffs, not first-hand records.
     rejected.
   - No Go code changed.
   - Uncommitted at the time of writing.
+
+## 2026-10-04: Security policy (P4-4) (uncommitted)
+
+- Change:
+  - The maintainer turned on GitHub private vulnerability reporting and
+    added GitHub's placeholder `SECURITY.md` on `main` (`2254473`), then
+    committed P4-3 and P4-5 locally as `be1ff43` (not yet on `origin/main`
+    when checked).
+  - `SECURITY.md` replaces the placeholder with the project's policy:
+    - Supported versions: only the latest release, because fixes land on
+      `main` and there are no maintenance branches.
+    - Reporting: privately through the Security & quality tab ("Report a
+      vulnerability", `/security/advisories/new`), never in public issues,
+      with a list of what to include and a reminder to redact private data.
+      Reports against unreleased code on `main` are welcome.
+    - What to expect: acknowledgement, assessment, a fix prepared privately,
+      and a published GitHub security advisory with credit and, when
+      warranted, a CVE. No fixed response times: one maintainer, best
+      effort.
+    - Scope, taken from the threat model in `cybersec.md`, and out-of-scope
+      cases (host findings Salus reports, unreachable dependency issues,
+      attackers who already control the account running Salus, a mounted
+      Docker socket, and missing Apple or Microsoft code signing).
+    - Release verification (checksums and build provenance) and a link to
+      `cybersec.md` for known issues.
+  - `CONTRIBUTING.md` "Security issues", the README ("Contributing and
+    license" and the project structure), the `map.md` tree, and the
+    `cybersec.md` controls list point to the policy. The issue template
+    contact link now opens GitHub's private report form, the bug form links
+    `SECURITY.md`, and the PR template asks contributors not to describe an
+    undisclosed vulnerability.
+  - `CONTRIBUTING.md` "Documentation" no longer tells contributors to add a
+    newly found issue to the public `cybersec.md` in their pull request: an
+    undisclosed vulnerability is reported privately and recorded there when
+    its advisory is published. `cybersec.md` notes that a fix merged from an
+    advisory's temporary private fork skips CI and branch rules, so it needs
+    local validation and a green CI run on `main` before the release tag.
+- Files: `SECURITY.md`, `CONTRIBUTING.md`, `README.md`,
+  `.github/ISSUE_TEMPLATE/config.yml`,
+  `.github/ISSUE_TEMPLATE/bug_report.yml`,
+  `.github/pull_request_template.md`, `intel/cybersec.md`,
+  `intel/map.md`, `intel/plan.md`, `intel/history.md`
+- Reason / reference: `plan.md` P4-4, after the maintainer chose GitHub
+  private vulnerability reporting as the channel.
+  - The two `.github/` files are delivered as a patch, because the remote
+    session cannot write `.github/`.
+  - An independent review checked the policy against the repository and
+    GitHub's documentation; its findings (the CONTRIBUTING conflict, the
+    private-fork caveat, the renamed tab, and wording) are fixed above.
+  - Not verified: the private vulnerability reporting setting itself, because
+    this session cannot reach the GitHub API for the repository.
+  - Uncommitted at the time of writing.

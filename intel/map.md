@@ -70,7 +70,7 @@ Salus/
 ├── intel/                      Repository intelligence documents (see AGENTS.md)
 ├── .github/dependabot.yml      Weekly updates: gomod, github-actions (codeql-action + artifact-actions groups), docker
 ├── .github/ISSUE_TEMPLATE/     Issue forms (P4-5): bug_report.yml, feature_request.yml (issue-first pitch),
-│                               config.yml (no blank issues; security reports go to CONTRIBUTING.md)
+│                               config.yml (no blank issues; security link opens private vulnerability reporting)
 ├── .github/pull_request_template.md   Linked issue, validation commands, checklist, security notes
 ├── .github/workflows/
 │   ├── ci.yml                  vet, lint, test+coverage, native build smoke (3 OSes)
@@ -86,6 +86,7 @@ Salus/
 ├── .golangci.yml               golangci-lint v2 config: pinned linter set (P4-3), tests analyzed
 ├── AGENTS.md                   Agent/contributor operating rules
 ├── README.md, CONTRIBUTING.md, CODE_OF_CONDUCT.md
+├── SECURITY.md                 Supported versions, private vulnerability reporting, scope (P4-4)
 ├── LICENSE (Apache-2.0), NOTICE, CODEOWNERS
 └── go.mod, go.sum              Module github.com/jabbott-iii/Salus, go 1.26.8 (latest patch; SEC-008)
 ```

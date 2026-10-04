@@ -711,11 +711,14 @@ pull request.
 ├── .golangci.yml         Pinned golangci-lint linter set
 ├── intel/                Maintainer documents: architecture, security, plans
 ├── CONTRIBUTING.md       Contribution workflow and validation
+├── SECURITY.md           Supported versions and private vulnerability reporting
 └── LICENSE, NOTICE       Apache-2.0 license and third-party notices
 ```
 
 ## Contributing and license
 
 Contributions start with an issue; see [CONTRIBUTING.md](CONTRIBUTING.md).
+Report security vulnerabilities privately, as described in
+[SECURITY.md](SECURITY.md), not in a public issue.
 Salus is licensed under the Apache License 2.0 (see [LICENSE](LICENSE)), and
 third-party notices are in [NOTICE](NOTICE).

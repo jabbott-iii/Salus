@@ -5,10 +5,11 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and
-P3-7; v1.0.2 is at `08b2faa`). The M6 review of new inputs and outputs found
-no new issue; its controls are listed under "Existing controls observed".
-SEC-009 is Closed; SEC-003 and SEC-005 still wait on maintainer checks.
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and P3-7,
+and the uncommitted `SECURITY.md` policy (P4-4); v1.0.2 is at `08b2faa`). The
+M6 review of new inputs and outputs found no new issue; its controls are listed
+under "Existing controls observed". SEC-009 is Closed; SEC-003 and SEC-005
+still wait on maintainer checks.
 
 ## Threat model summary
 
@@ -163,6 +164,20 @@ SEC-009 is Closed; SEC-003 and SEC-005 still wait on maintainer checks.
   commits only, and a passing CodeQL code scanning check. Branch and tag
   deletion and force pushes are blocked. The repository admin role can
   bypass them.
+- Vulnerability reports go through GitHub private vulnerability reporting,
+  which the maintainer turned on 2026-10-04. `SECURITY.md` (P4-4) states the
+  supported versions (only the latest release), the scope, and coordinated
+  disclosure through a GitHub security advisory. A privately reported issue
+  gets a SEC item here only when its advisory is published.
+  - A fix prepared in an advisory's temporary private fork bypasses the
+    controls above: GitHub runs no CI or status checks there and enforces no
+    branch rules when merging from it. Run the `CONTRIBUTING.md` validation
+    locally before merging, and let CI pass on `main` (plus a manual CD run)
+    before tagging the fixed release.
+  - Not verified by this review: the setting itself, because this session
+    cannot reach the GitHub API for the repository. Check it with
+    `gh api repos/jabbott-iii/Salus/private-vulnerability-reporting`, which
+    should return `{"enabled": true}`.
 - Since v1.0.2 (`08b2faa`), the CD `package` job attests build provenance for
   every release archive. It is the only job with
   `id-token: write` and `attestations: write`, and it runs only first-party
