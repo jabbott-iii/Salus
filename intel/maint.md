@@ -7,8 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes,
-P6-1 to P6-12).
+Last reviewed: 2026-10-04 (against `8856673`, which carries M6, P6-1 to
+P6-12).
 
 ## 1. Purpose and scope
 
@@ -196,7 +196,17 @@ authorization plus README and `history.md` updates:
     FAIL if expired or not yet valid, or if the file cannot be read, is over
     1 MiB, or has no certificate; WARN within `--cert-warn-days`.
   - `disk-inodes` reports PASS with a note for a filesystem that reports no
-    inode count.
+    inode count, and always on Windows (after checking that the path
+    exists).
+  - `cpu-load` on Windows is the busy percentage of a 1-second
+    `GetSystemTimes` sample (`cpuSampleInterval`), compared with the
+    `--load-warn`/`--load-fail` thresholds; it cannot exceed 100, so with the
+    defaults it fails only for a fully busy sample. On Linux and macOS it is
+    the 1-minute load average per CPU. `memory` on macOS is the share of
+    pages that are not free, speculative, file-backed, or purgeable
+    (`darwinMemoryUsedPercent`), and on Windows physical memory in use from
+    `GlobalMemoryStatusEx`; the message names swap (Linux, macOS) or the
+    commit charge (Windows).
   - The README table "What each check reports" must match the code.
 - **`misconfig` rule identifiers:** `home-unset`, `db-permissions`,
   `kubeconfig-permissions`, `docker-socket-permissions`,
@@ -300,9 +310,17 @@ authorization plus README and `history.md` updates:
   isolate it. The rules based on POSIX modes skip Windows. They also skip
   paths on WSL drvfs mounts (`syntheticModes`, `health-mounts_linux.go`),
   where the mode bits are made up.
-- Platform-specific logic uses `_linux.go` / `_other.go` files with matching
-  build constraints, and every platform must define every function the
-  registry references. Checks that need systemd tools (`systemd-failed`,
+- Platform-specific logic uses `_linux.go`, `_darwin.go`, `_windows.go`, and
+  `_other.go` files with matching build constraints (`_other.go` is
+  `!linux && !darwin && !windows`), and every platform must define every
+  function the registry references. Classification shared by the
+  implemented platforms (`diskSpaceOutcome`, `inodeOutcome`) is in
+  `health-resources.go` (`linux || darwin || windows`). Pure decoding of
+  platform data (sysctl structs, Windows CPU counters) is in
+  `health-decode.go`, which has no build constraint so that its tests run on
+  every platform; golangci-lint includes test files by default, so `unused`
+  does not report those functions on platforms whose checks do not call
+  them. Checks that need systemd tools (`systemd-failed`,
   `time-sync`) instead test `runtime.GOOS` at run time, like
   `service-uptime`, and report WARN off Linux.
 - Files that checks read on the user's behalf (`--cert`, sshd_config and its
@@ -320,13 +338,15 @@ authorization plus README and `history.md` updates:
   `check run` uses them as flag defaults on every platform. The threshold
   accessors and `orDefault` live in `health-thresholds.go`. Zero or negative
   option values, as tests and other Go callers may pass, fall back to the
-  defaults. That file is constrained to `//go:build linux` because only the
-  Linux resource checks use the accessors. Widen the constraint when macOS
-  and Windows checks are added (P3-7).
+  defaults. That file is constrained to `linux || darwin || windows`, the
+  platforms whose resource checks use the accessors (P3-7).
 - Unexported code referenced only from platform-specific files must carry
   the same build constraint. Otherwise golangci-lint's `unused` check fails
   on the other operating systems (this broke the macOS CI job on
-  2026-09-27). Lint for all three targets (see section 6).
+  2026-09-27). Lint for all three targets (see section 6). The one exception
+  is `health-decode.go` (see the platform-specific logic rule above), whose
+  functions every platform's tests use; it depends on golangci-lint's
+  default `run.tests: true`, so keep that default.
 
 ### Adding a new check (checklist)
 1. Add a `key...` constant and append it to the end of `AllCheckKeys` in
@@ -399,12 +419,25 @@ authorization plus README and `history.md` updates:
 - **CGO is required.** `gorm.io/driver/sqlite` uses `github.com/mattn/go-sqlite3`.
   A `CGO_ENABLED=0` build compiles but cannot open the database at runtime.
   Every build needs a C toolchain.
-- **Resource checks are Linux-only today.** Disk space and inodes, memory, CPU
-  load, and host uptime read `/proc` and `statfs`. On other platforms they return `WARN`, so
-  `check run` exits `1` on macOS and Windows. macOS and Windows
-  implementations are approved (Q-005, `plan.md` P3-7). Prefer the standard
-  library `syscall` package. Adding `golang.org/x/sys` requires a recorded
-  reason and a `NOTICE` update.
+- **Resource checks run on Linux, macOS, and Windows** (P3-7, Q-005), with
+  the standard library `syscall` package only:
+  - Linux: `/proc` and `statfs`. macOS: `statfs` (shared with Linux in
+    `health-disk_unix.go`) and sysctl values read with `syscall.Sysctl` and
+    `SysctlUint32`. Windows: `kernel32` functions called through
+    `syscall.NewLazyDLL("kernel32.dll")`, which the standard library
+    registers as a system DLL, so it loads only from System32.
+  - `syscall.Sysctl` drops one trailing NUL byte; `darwinSysctlValue`
+    restores it for binary values and checks the size.
+  - kernel32 calls pass `uintptr(unsafe.Pointer(&x))` directly in the
+    `LazyProc.Call` argument list (`//go:uintptrescapes` keeps the memory
+    alive), call `Find` first so a missing function is an error rather than
+    a panic, and never use `Filetime.Nanoseconds` for durations (it converts
+    to Unix time, so a duration comes out negative). `GetDiskFreeSpaceExW`
+    gets a directory with a trailing separator, and on 32-bit Windows the
+    `GetTickCount64` result is combined from both return registers.
+  - Other platforms keep the WARN stubs in `health-resources_other.go`.
+  - Adding `golang.org/x/sys` still requires a recorded reason and a
+    `NOTICE` update.
 - **Direct dependencies:** `spf13/cobra`, `gorm.io/gorm`,
   `gorm.io/driver/sqlite`. Do not add dependencies without a documented
   reason in `plan.md` or `notes.md`; prefer the standard library.

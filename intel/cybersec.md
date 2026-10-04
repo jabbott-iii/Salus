@@ -5,9 +5,10 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes;
+Last reviewed: 2026-10-04 (against `8856673`, which carries M5 and M6;
 v1.0.2 is at `08b2faa`). The M6 review of new inputs and outputs found no new
-issue; its controls are listed under "Existing controls observed".
+issue; its controls are listed under "Existing controls observed". SEC-009 is
+Closed; SEC-003 and SEC-005 still wait on maintainer checks.
 
 ## Threat model summary
 
@@ -117,6 +118,16 @@ issue; its controls are listed under "Existing controls observed".
     regular files, so a FIFO cannot block a scheduled run.
   - New SQL (`jobs stats`) uses `?` placeholders and a subquery, like
     `jobs prune`.
+- P3-7 platform calls (2026-10-04):
+  - Windows: `kernel32.dll` is loaded with `syscall.NewLazyDLL`, which the
+    standard library loads from System32 only because `syscall` registers it
+    as a system DLL, so no DLL preloading is possible. The only user value
+    passed is the `--disk-path`, as a UTF-16 string to
+    `GetDiskFreeSpaceExW`; a path with a NUL byte is rejected by
+    `UTF16PtrFromString`. `unsafe` is limited to passing pointers to local
+    variables in `LazyProc.Call` argument lists.
+  - macOS: only fixed sysctl names are read; returned sizes are checked
+    before decoding.
 - `jobs prune` deletes through parameterized GORM queries (requirement 3).
 - The `misconfig` check reports insecure host settings: group- or
   other-accessible database and kubeconfig files, a Docker socket writable by
@@ -593,7 +604,7 @@ GitHub, because the available token cannot read it.
 
 ### SEC-009: External tool output reaches the terminal and the database unfiltered
 
-- **Status:** In Progress (fixed in the working tree; awaiting CI)
+- **Status:** Closed (2026-10-04)
 - **Affected component:** `internal/health.go` (check messages built from
   `docker`, `kubectl`, and `systemctl` output) and `internal/logic-cli.go`
   (`jobs show` text output)
@@ -616,7 +627,10 @@ GitHub, because the available token cannot read it.
 - **Validation:** Unit tests show that escape sequences from a fake tool are
   replaced in `RunChecks` output, and that stored control characters are
   replaced in `jobs show` text output. CI is green.
-- **Resolution:** Implemented 2026-09-28 (uncommitted); awaiting CI.
+- **Resolution:** Implemented 2026-09-28 and committed in `28e66d0`. Both
+  validation points are met: the unit tests below pass, and CI is green on
+  `28e66d0` (CI #78 on ubuntu, macOS, and Windows; Docker #34; Security #83)
+  and on `8856673` (CI #79), which also sanitizes targets (M6).
   - `sanitizeMessage` replaces every Unicode control character (C0, DEL, and
     C1) with `?`.
   - `RunChecks` applies it to every outcome, so the report, `--json`, and the

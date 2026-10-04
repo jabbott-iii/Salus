@@ -1,4 +1,4 @@
-//go:build !linux
+//go:build !linux && !darwin && !windows
 
 /*
 Copyright 2026 Joseph Anthony Abbott III
@@ -23,26 +23,25 @@ import (
 	"time"
 )
 
-// checkDiskSpace, checkMemory, and checkCPULoad currently rely on Linux-specific
-// interfaces (/proc, statfs). On other platforms they report as unsupported
-// rather than failing the whole scan.
+// The resource checks are implemented for Linux, macOS, and Windows. On other
+// platforms they report as unsupported rather than failing the whole scan.
 
 func checkDiskSpace(opts CheckOptions) CheckOutcome {
-	return CheckOutcome{Key: keyDiskSpace, Status: StatusWarn, Message: "disk space check is only supported on Linux"}
+	return CheckOutcome{Key: keyDiskSpace, Status: StatusWarn, Message: "disk space check is only supported on Linux, macOS, and Windows"}
 }
 
 func checkDiskInodes(opts CheckOptions) CheckOutcome {
-	return CheckOutcome{Key: keyDiskInodes, Status: StatusWarn, Message: "inode usage check is only supported on Linux"}
+	return CheckOutcome{Key: keyDiskInodes, Status: StatusWarn, Message: "inode usage check is only supported on Linux, macOS, and Windows"}
 }
 
 func checkMemory(opts CheckOptions) CheckOutcome {
-	return CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory check is only supported on Linux"}
+	return CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory check is only supported on Linux, macOS, and Windows"}
 }
 
 func checkCPULoad(opts CheckOptions) CheckOutcome {
-	return CheckOutcome{Key: keyCPULoad, Status: StatusWarn, Message: "CPU load check is only supported on Linux"}
+	return CheckOutcome{Key: keyCPULoad, Status: StatusWarn, Message: "CPU load check is only supported on Linux, macOS, and Windows"}
 }
 
 func readSystemUptime() (time.Duration, error) {
-	return 0, errors.New("host uptime is only supported on Linux")
+	return 0, errors.New("host uptime is only supported on Linux, macOS, and Windows")
 }

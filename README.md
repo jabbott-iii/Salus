@@ -16,7 +16,8 @@ for later review and comparison (unless you pass `--no-save`).
 - **System Resources**
   - Disk space and inode usage on one or more mount points
   - Memory and swap usage
-  - CPU load average relative to available CPUs
+  - CPU load: the load average relative to available CPUs (on Windows, which
+    has no load average, the busy percentage of a short sample)
   - Configurable WARN and FAIL thresholds for each
 
 - **Container Runtime**
@@ -58,11 +59,25 @@ for later review and comparison (unless you pass `--no-save`).
   - Exit codes that reflect the worst result, with `--fail-on` to let WARN pass
 
 Platform support: the disk space, inode, memory, CPU load, and host uptime
-checks read `/proc` and `statfs`, so they run on Linux only. On macOS and
-Windows they report `WARN` (for example `disk space check is only supported on
-Linux`), so a full `check run` there exits with code `1` or higher. Checking a
-service with `--service`, failed units, and time synchronization require
-systemd, so they are also Linux-only.
+checks run on Linux, macOS, and Windows:
+
+| Platform | Disk space and inodes | Memory | CPU | Host uptime |
+|---|---|---|---|---|
+| Linux | `statfs` | `/proc/meminfo` (`MemAvailable`, swap) | 1-minute load average per CPU (`/proc/loadavg`) | `/proc/uptime` |
+| macOS | `statfs` | VM page counts: memory other than free, speculative, file-cache, and purgeable pages, close to Activity Monitor's "Memory Used"; swap from `vm.swapusage` | 1-minute load average per CPU (`vm.loadavg`) | `kern.boottime` |
+| Windows | `GetDiskFreeSpaceExW`; inodes do not apply, so `disk-inodes` reports `PASS` with a note | `GlobalMemoryStatusEx` (physical memory, and the commit charge against the commit limit) | Percentage of CPU time that was busy during a 1-second sample (`GetSystemTimes`); Windows has no load average | `GetTickCount64` |
+
+Because `cpu-load` measures a busy percentage on Windows, its `value` (in
+`--json` and `salus_check_value`) means something different there than on
+Linux and macOS; keep that in mind on dashboards that mix platforms. On
+Windows, a `--disk-path` that names a file is measured on its directory, as
+`statfs` does on Linux and macOS.
+
+Checking a service with `--service`, failed units, and time synchronization
+require systemd, so they are Linux-only and report `WARN` elsewhere; a full
+`check run` on macOS or Windows therefore exits with code `1` or higher unless
+you choose checks with `--only` or pass `--fail-on fail`. Other platforms
+(such as FreeBSD) report `WARN` for the resource checks too.
 
 ## Use cases
 
@@ -259,7 +274,8 @@ Flags for `check run`:
   its own result.
 - `--disk-path` — mount path for `disk-space` and `disk-inodes` (default `/`).
   Repeat the flag to check several paths; each gets its own result. Commas are
-  part of the path.
+  part of the path. On Windows, give a drive or a directory on it, such as
+  `C:\` or `D:\data`; the default `/` means the root of the current drive.
 - `--kube-context` — kubeconfig context for `kubernetes-status` and
   `kubernetes-pods` (defaults to kubectl's current context). A name that
   starts with `-` or contains control characters fails the check without
@@ -280,7 +296,10 @@ Flags for `check run`:
   WARN and FAIL (defaults `80` and `90`)
 - `--load-warn`, `--load-fail` — 1-minute load average per CPU, in percent, at
   which `cpu-load` reports WARN and FAIL (defaults `80` and `100`; `100` means
-  a load average equal to the number of CPUs)
+  a load average equal to the number of CPUs). On Windows they apply to the
+  busy percentage of a 1-second sample, which cannot exceed `100`: with the
+  defaults, `cpu-load` warns from 80% busy and fails only when every CPU was
+  busy for the whole sample.
 - `--timeout` — time limit for each external command (`docker`, `kubectl`,
   `systemctl`, `timedatectl`; default `3s`)
 - `--format` — report format: `text` (default), `json`, `nagios`,
@@ -316,7 +335,7 @@ What each check reports:
 
 | Check | PASS | WARN | FAIL |
 |---|---|---|---|
-| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs) | At or above the WARN threshold; not Linux | At or above the FAIL threshold; data unreadable or path missing |
+| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs, and every Windows volume) | At or above the WARN threshold; not Linux, macOS, or Windows; on Windows, CPU usage unknown | At or above the FAIL threshold; data unreadable or path missing |
 | `docker-status` | Daemon reachable, no unhealthy or restarting containers | Unhealthy or restarting containers; container list unavailable; no `docker` CLI | Daemon unreachable |
 | `kubernetes-status` | Cluster reachable and every node Ready without pressure, or listing nodes is forbidden | Some nodes NotReady; nodes reporting MemoryPressure, DiskPressure, or PIDPressure; readiness unknown; no `kubectl` CLI | Cluster unreachable (a Forbidden answer counts as reachable); no node Ready; invalid `--kube-context` |
 | `kubernetes-pods` | Every pod Ready (completed pods are ignored), no pods, or listing pods is forbidden | Pods in CrashLoopBackOff, Failed, or not Ready; pod list unavailable; no `kubectl` CLI | Invalid `--kube-namespace` or `--kube-context` |
@@ -570,6 +589,10 @@ These changes can raise the exit code on hosts that passed before:
   `systemd-failed`, and `time-sync`. Without systemd (containers, macOS,
   Windows) or `kubectl`, they report `WARN`; use `--only` to choose checks, or
   `--fail-on fail` to let WARN pass.
+- On macOS and Windows, the disk space, inode, memory, CPU, and host uptime
+  checks now measure the host instead of always reporting `WARN`, so they can
+  pass, or report `WARN` or `FAIL` from the thresholds. A plain `check run`
+  on Windows takes about a second longer, for the CPU sample.
 
 Other changes:
 

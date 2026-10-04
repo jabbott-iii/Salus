@@ -1,4 +1,4 @@
-//go:build linux
+//go:build linux || darwin || windows
 
 /*
 Copyright 2026 Joseph Anthony Abbott III
@@ -18,12 +18,12 @@ limitations under the License.
 
 package internal
 
-// Threshold accessors for the disk, memory, and CPU load checks. The defaults
-// are in health.go, because check run uses them as flag defaults everywhere.
-// Only the Linux resource checks use the accessors today, so this file is
-// built only on Linux; otherwise the unused linter fails on the non-Linux
-// stubs. Widen the build constraint when the macOS and Windows checks land
-// (intel/plan.md P3-7).
+// Threshold accessors for the disk, inode, memory, and CPU load checks. The
+// defaults are in health.go, because check run uses them as flag defaults
+// everywhere. Only the platforms with resource checks (Linux, macOS, and
+// Windows; P3-7) use the accessors, so this file is built only there;
+// otherwise the unused linter fails on the stubs in
+// health-resources_other.go.
 
 func orDefault(v, def float64) float64 {
 	if v <= 0 {

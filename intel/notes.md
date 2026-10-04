@@ -3,7 +3,7 @@
 Durable engineering notes and unresolved technical questions. Active work items
 live in [`plan.md`](plan.md), security items in [`cybersec.md`](cybersec.md).
 
-Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes;
+Last reviewed: 2026-10-04 (against `8856673`, which carries M5 and M6;
 v1.0.2 is at `08b2faa`).
 
 ## Engineering notes
@@ -142,8 +142,45 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   error.
 - **Duplicated constants.** *Resolved 2026-09-27 (P1-3):* `DatabasePathEnv`
   and `DefaultDatabasePath` are defined once in `internal/database.go`.
-- **Non-Linux results.** Disk, memory, and CPU checks return `WARN` on macOS
-  and Windows, so `check run` exits `1` there with default options.
+- **Non-Linux results.** *Resolved 2026-10-04 (P3-7):* disk, inode, memory,
+  CPU, and host uptime checks measure macOS and Windows hosts. `check run`
+  still exits `1` there with default options, because the systemd-based
+  checks (`service-uptime` with `--service`, `systemd-failed`, `time-sync`)
+  report WARN off Linux.
+- **macOS and Windows data sources (P3-7, 2026-10-04).**
+  - macOS memory is computed from VM page counts: available = free +
+    speculative + file-backed (`vm.page_pageable_external_count`) +
+    purgeable pages, over `hw.memsize / vm.pagesize`. That is close to
+    Activity Monitor's "Memory Used" and to Linux's `MemTotal -
+    MemAvailable`. The first draft used `kern.memorystatus_level` (what
+    `memory_pressure(1)` prints); the independent review showed from XNU
+    source that on macOS it counts active pages as available, so it measures
+    pressure (wired and compressed memory), not use, and a Mac with apps
+    holding most of its memory would have passed. The kernel page size
+    (`vm.pagesize`) is used because `hw.pagesize` reports 4096 to an amd64
+    binary under Rosetta. Integer sysctls are read as 4 or 8 bytes
+    (`darwinSysctlUint`), because XNU declares some as int and some as quad.
+  - macOS swap (`vm.swapusage`) is allocated on demand, so a host with no
+    swap file yet reports 0%.
+  - The sysctl struct layouts (`loadavg` 24 bytes, `xsw_usage` 32,
+    `timeval` 16) are for LP64 little-endian macOS (amd64 and arm64).
+  - Windows has no load average; a 1-second `GetSystemTimes` sample stands
+    in, so `check run` takes about a second longer there, and a short burst
+    can WARN where a 1-minute average would not.
+  - Windows "swap" is reported as the commit charge against the commit
+    limit (physical memory plus page files), from `GlobalMemoryStatusEx`.
+  - On Windows, `--disk-path /` (the default) is the root of the current
+    drive; `filepath.FromSlash` turns `/` into `\` before
+    `GetDiskFreeSpaceExW`. That function takes only directories, and UNC
+    shares need a trailing backslash, so a file path is replaced by its
+    directory and a separator is appended.
+  - `GetTickCount64` returns its 64-bit result in two registers on 32-bit
+    Windows; both halves are combined there (windows/386 is not a release
+    target, but it builds).
+  - None of this ran on a real Mac or Windows machine before commit; the
+    CI jobs on `macos-latest` and `windows-latest` run
+    `TestResourceChecksReadThisHost`, `TestDarwinSysctlsReadable`, and
+    `TestWindowsKernel32Readable` against the real system calls.
 - **Windows false positive in `misconfig`.** On Windows, Go's `FileMode`
   reports `0666` for any file without the read-only attribute
   (`os/types_windows.go`), so the "writable by group/other" test fires for

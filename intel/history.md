@@ -580,3 +580,93 @@ reconstructed from commit messages and diffs, not first-hand records.
   - An independent review found no high-severity defects; its medium and low
     findings were fixed before handover (listed in `plan.md`).
   - Uncommitted at the time of writing.
+
+## 2026-10-04: M6 committed and validated by CI; M5, SEC-009, and P3-8 closed
+
+- Change:
+  - The maintainer committed M6 to `main` as `8856673` (38 files). Its content
+    is byte-identical to the validated working tree (checked by SHA-256 over
+    the 38 files).
+  - GitHub Actions on `8856673` succeeded: CI #79 (ubuntu, macOS, and Windows,
+    including golangci-lint and the tests), Docker #35, and Security #85
+    (CodeQL and govulncheck).
+  - Status updates from that evidence and from the earlier runs on `28e66d0`
+    (CI #78, Docker #34, Security #83):
+    - `plan.md`: P2-9, P3-2 to P3-6, P5-2, P3-8, and P6-1 to P6-12 are Done;
+      the recommended sequence lists the v1.1.0 release steps.
+    - `cybersec.md`: SEC-009 is Closed.
+    - "Last reviewed" lines in `plan.md`, `maint.md`, `map.md`, `notes.md`,
+      and `cybersec.md` now name `8856673`.
+- Files: `intel/plan.md`, `intel/cybersec.md`, `intel/maint.md`,
+  `intel/map.md`, `intel/notes.md`, `intel/history.md`
+- Reason / reference: the "Awaiting CI" and "Awaiting merge" criteria in
+  `plan.md` and the SEC-009 validation in `cybersec.md`. Not verified: the
+  Code Scanning alert state (gosec), which this review cannot read.
+  - Uncommitted at the time of writing.
+
+## 2026-10-04: P3-7 — macOS and Windows resource checks (uncommitted)
+
+- Change:
+  - Disk space, inodes, memory, CPU load, and host uptime now measure macOS
+    and Windows hosts instead of reporting WARN, using only the standard
+    library `syscall` package (no `golang.org/x/sys`, `NOTICE` unchanged).
+    - macOS: `statfs` (shared with Linux), and sysctl
+      `kern.memorystatus_level`, `vm.swapusage`, `vm.loadavg`, and
+      `kern.boottime`.
+    - Windows: `GetDiskFreeSpaceExW`, `GlobalMemoryStatusEx`,
+      `GetSystemTimes` (CPU busy percentage over a 1-second sample, because
+      Windows has no load average), and `GetTickCount64`; `disk-inodes`
+      reports PASS with a note.
+  - The Linux disk and inode code moved, unchanged in behavior, into
+    `health-disk_unix.go` (statfs) and `health-resources.go` (shared
+    classification); the WARN stubs now cover only other platforms.
+  - `health-thresholds.go` is built for `linux || darwin || windows`.
+  - Documentation: README (platform table, `--disk-path` and `--load-*` on
+    Windows, check table, upgrade notes), `maint.md` (sections 3, 4, 5),
+    `map.md`, `notes.md`, `cybersec.md`, and `plan.md` (P3-7, sequence).
+- Files:
+  - New: `internal/health-resources.go`, `internal/health-disk_unix.go`,
+    `internal/health-resources_darwin.go`,
+    `internal/health-resources_windows.go`, `internal/health-decode.go`, and
+    tests `internal/health-resources_test.go`,
+    `internal/health-thresholds_test.go`, `internal/health-decode_test.go`,
+    `internal/health-resources_darwin_test.go`,
+    `internal/health-resources_windows_test.go`.
+  - Changed: `internal/health-resources_linux.go`,
+    `internal/health-resources_linux_test.go`,
+    `internal/health-resources_other.go`, `internal/health-thresholds.go`,
+    `internal/logic-cli_test.go`, `README.md`, and `intel/` documents.
+- Reason / reference: `plan.md` P3-7 (Q-005), chosen by the maintainer on
+  2026-10-04 as the next item after M6.
+  - Validated on Linux (tests, race, non-root run, coverage) and by vet,
+    test compilation, and staticcheck for darwin, windows, and freebsd.
+  - The macOS and Windows code has not run on those systems yet; CI does that
+    on the first push.
+  - Uncommitted at the time of writing.
+
+## 2026-10-04: Review fixes to P3-7 (uncommitted)
+
+- Change: an independent review of the P3-7 working tree found no
+  high-severity defects; these findings were fixed before handover:
+  - macOS `memory` is now computed from VM page counts (free, speculative,
+    file-backed, and purgeable pages against `hw.memsize / vm.pagesize`),
+    not from `kern.memorystatus_level` as the previous entry says. The review
+    showed from XNU source that on macOS that level counts active pages as
+    available, so it measures memory pressure rather than use. Integer
+    sysctls are read as 4 or 8 bytes (`darwinSysctlUint`).
+  - Windows: `GetTickCount64` combines both return registers on 32-bit
+    Windows; `GetDiskFreeSpaceExW` gets the directory of a file path and a
+    trailing separator (needed for UNC shares).
+  - Documentation: the README Features bullet and platform notes (including
+    that `cpu-load`'s value is a busy percentage on Windows), the `map.md`
+    diagram, the `maint.md` build-constraint exception for
+    `health-decode.go`, and the `Filetime.Nanoseconds` wording.
+- Files: `internal/health-decode.go`, `internal/health-decode_test.go`,
+  `internal/health-resources_darwin.go`,
+  `internal/health-resources_darwin_test.go`,
+  `internal/health-resources_windows.go`,
+  `internal/health-resources_windows_test.go`, `README.md`,
+  `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md`,
+  `intel/history.md`
+- Reason / reference: the independent review of 2026-10-04.
+  - Uncommitted at the time of writing.

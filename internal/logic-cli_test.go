@@ -238,8 +238,10 @@ func TestCheckRunWarnReturnsExitStatus(t *testing.T) {
 }
 
 func TestCheckRunFailReturnsExitStatus(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("the disk-space check can only FAIL on Linux")
+	switch runtime.GOOS {
+	case "linux", "darwin", "windows":
+	default:
+		t.Skip("the disk-space check is a stub on this platform")
 	}
 	db := newSeededTestDatabase(t)
 	missing := filepath.Join(t.TempDir(), "does-not-exist")

@@ -24,71 +24,8 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 )
-
-// checkDiskSpace inspects free space on the configured mount path (defaults to "/").
-func checkDiskSpace(opts CheckOptions) CheckOutcome {
-	start := time.Now()
-	path := opts.DiskPath
-	if path == "" {
-		path = "/"
-	}
-
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return CheckOutcome{Key: keyDiskSpace, Status: StatusFail, Message: fmt.Sprintf("statfs %s: %v", path, err), Duration: time.Since(start)}
-	}
-
-	total := stat.Blocks * uint64(stat.Bsize)
-	free := stat.Bavail * uint64(stat.Bsize)
-	usedPercent := 0.0
-	if total > 0 {
-		usedPercent = (1 - float64(free)/float64(total)) * 100
-	}
-
-	status, msg := thresholdStatus(usedPercent, opts.diskWarnPercent(), opts.diskFailPercent(),
-		fmt.Sprintf("%s: %.1f%% used (%.1f%% free)", path, usedPercent, 100-usedPercent))
-
-	return CheckOutcome{Key: keyDiskSpace, Status: status, Message: msg, Duration: time.Since(start)}.withValue(usedPercent, unitPercent)
-}
-
-// checkDiskInodes inspects inode usage on the configured mount path. A
-// filesystem can run out of inodes (many small files) while it still has
-// free space, and then no file can be created on it.
-func checkDiskInodes(opts CheckOptions) CheckOutcome {
-	start := time.Now()
-	path := opts.DiskPath
-	if path == "" {
-		path = defaultDiskPath
-	}
-
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(path, &stat); err != nil {
-		return CheckOutcome{Key: keyDiskInodes, Status: StatusFail, Message: fmt.Sprintf("statfs %s: %v", path, err), Duration: time.Since(start)}
-	}
-	outcome := inodeOutcome(path, stat.Files, stat.Ffree, opts)
-	outcome.Duration = time.Since(start)
-	return outcome
-}
-
-// inodeOutcome classifies inode usage from statfs's total (files) and free
-// (ffree) inode counts.
-func inodeOutcome(path string, files, ffree uint64, opts CheckOptions) CheckOutcome {
-	if files == 0 {
-		// Filesystems that allocate inodes dynamically (for example btrfs)
-		// report no inode count, so they cannot run out in this sense.
-		return CheckOutcome{Key: keyDiskInodes, Status: StatusPass, Message: fmt.Sprintf("%s: filesystem does not report an inode count", path)}
-	}
-	if ffree > files {
-		ffree = files
-	}
-	usedPercent := float64(files-ffree) / float64(files) * 100
-	status, msg := thresholdStatus(usedPercent, opts.inodeWarnPercent(), opts.inodeFailPercent(),
-		fmt.Sprintf("%s: %.1f%% of inodes used (%d free)", path, usedPercent, ffree))
-	return CheckOutcome{Key: keyDiskInodes, Status: status, Message: msg}.withValue(usedPercent, unitPercent)
-}
 
 // meminfo holds the subset of /proc/meminfo used by the memory check.
 type meminfo struct {

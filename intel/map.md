@@ -3,8 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-10-03 (against `28e66d0` plus the uncommitted M6 changes,
-P6-1 to P6-12).
+Last reviewed: 2026-10-04 (against `8856673`, which carries M6, P6-1 to
+P6-12).
 
 ## Directory structure
 
@@ -25,23 +25,33 @@ Salus/
 │   │                           thresholdStatus, registry + checkTargets, RunChecks; docker,
 │   │                           kubernetes-status (readiness + node pressure, kubectlFor),
 │   │                           service-uptime, misconfig rules (misconfigRules with stable ids)
-│   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux until P3-7)
-│   ├── health-resources_linux.go   disk space + inodes (statfs), memory (/proc/meminfo),
-│   │                               CPU load (/proc/loadavg), uptime (/proc/uptime)
+│   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux || darwin || windows)
+│   ├── health-resources.go     diskSpaceOutcome, inodeOutcome (linux || darwin || windows)
+│   ├── health-disk_unix.go     disk space + inodes via statfs (linux || darwin)
+│   ├── health-resources_linux.go   memory (/proc/meminfo), CPU load (/proc/loadavg),
+│   │                               uptime (/proc/uptime)
+│   ├── health-resources_darwin.go  memory (VM page counts, hw.memsize, vm.swapusage),
+│   │                               CPU load (vm.loadavg), uptime (kern.boottime) via sysctl
+│   ├── health-resources_windows.go disk (GetDiskFreeSpaceExW), memory (GlobalMemoryStatusEx),
+│   │                               CPU busy % (GetSystemTimes, 1s sample), uptime (GetTickCount64)
+│   ├── health-decode.go        Pure decoding of sysctl structs and CPU counters (no build constraint)
 │   ├── health-systemd.go       systemd-failed (systemctl list-units), time-sync (timedatectl)
 │   ├── health-pods.go          kubernetes-pods (kubectl get pods, --kube-namespace)
 │   ├── health-certs.go         cert-expiry (PEM/DER files, crypto/x509)
 │   ├── health-sshd.go          sshd-root-login / sshd-password-auth rules: sshd_config parser
 │   │                           (Include, first value wins, Match), SALUS_SSHD_CONFIG
-│   ├── health-resources_other.go   Non-Linux stubs returning WARN
+│   ├── health-resources_other.go   Stubs returning WARN on other platforms (!linux && !darwin && !windows)
 │   ├── health-mounts_linux.go  syntheticModes: WSL drvfs detection from /proc/self/mounts
 │   ├── health-mounts_other.go  syntheticModes stub (false) for other platforms
 │   ├── health-mounts_linux_test.go  /proc/self/mounts fixtures for drvfs detection
 │   ├── health_test.go          Thresholds, RunChecks, report and exit-code helpers
 │   ├── checks_test.go          Docker/kubectl/systemctl checks with fake tools (fakeToolOptions),
 │   │                           misconfig rules with isolated env (isolateMisconfigEnv)
-│   ├── health-resources_linux_test.go  /proc parser fixtures, threshold accessors, disk-space FAIL,
-│   │                                   inode usage (inodeOutcome)
+│   ├── health-resources_linux_test.go  /proc parser fixtures
+│   ├── health-resources_test.go    Disk/inode classification, missing paths, live reads of this host
+│   ├── health-thresholds_test.go   Threshold accessors
+│   ├── health-decode_test.go       sysctl and CPU-counter decoding (runs everywhere)
+│   ├── health-resources_{darwin,windows}_test.go  Live sysctl / kernel32 reads on CI runners
 │   ├── health-{systemd,pods,certs,sshd}_test.go  New checks: fake tools, generated certificates,
 │   │                                   sshd_config fixture trees
 │   ├── report.go               Text/JSON output (outcomes; jobs for jobs list/show --json), WorstStatus,
@@ -113,7 +123,7 @@ flowchart LR
     JobsStats --> ScanStats["ScanStats<br/>(scan-history.go)"]
 
     RunChecks --> Targets["checkTargets: one run per<br/>--disk-path / --service / --cert"]
-    RunChecks --> Resources["disk space + inodes / memory /<br/>cpu / uptime<br/>(/proc, statfs — Linux only)"]
+    RunChecks --> Resources["disk space + inodes / memory /<br/>cpu / uptime<br/>(Linux: /proc, statfs; macOS: statfs,<br/>sysctl; Windows: kernel32)"]
     RunChecks --> Exec["exec.CommandContext<br/>docker · kubectl · systemctl · timedatectl"]
     RunChecks --> Files["--cert files (crypto/x509)"]
     RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket and TCP, PATH,<br/>sshd_config)"]
