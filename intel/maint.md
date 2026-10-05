@@ -7,8 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7; P7
-run hardening added uncommitted on top of `b16129f`).
+Last reviewed: 2026-10-05 (against `5919264`: M7 run hardening was committed
+in `7060887` and the P8-1 container image release in `5919264`).
 
 ## 1. Purpose and scope
 
@@ -40,7 +40,7 @@ CLI → checks, reporting, persistence. Check and report code does not call
 persistence functions or touch the database, and must stay that way. The
 only shared symbol is the `DatabasePathEnv` constant, which the `misconfig`
 check reads. `DatabasePathEnv` and `DefaultDatabasePath` are defined once in
-`internal/database.go` and used by `main`. See `map.md` for diagrams.
+`internal/database-path.go` and used by `main`. See `map.md` for diagrams.
 
 ### Runtime flow
 
@@ -167,7 +167,7 @@ authorization plus README and `history.md` updates:
 - **Unknown input is an error:** group commands (`check`, `jobs`) use
   `runGroup`, which rejects unknown subcommands (with suggestions) instead of
   printing help and exiting 0. Leaf commands declare `Args` (`cobra.NoArgs`,
-  `cobra.ExactArgs(1)`).
+  `cobra.ExactArgs(1)`, or `cobra.MaximumNArgs(2)` for `jobs diff`).
 - **Environment variable:** `SALUS_SSHD_CONFIG` (`SSHDConfigEnv`, M6)
   overrides the sshd_config that the `sshd-*` rules read (default
   `/etc/ssh/sshd_config`, or `%ProgramData%\ssh\sshd_config` on Windows).
@@ -186,7 +186,8 @@ authorization plus README and `history.md` updates:
   - not starting with `-`.
 
   Context names have no fixed character set. Anything else fails
-  `kubernetes-status` without running `kubectl`. A valid name is passed as
+  `kubernetes-status` and `kubernetes-pods` (both use `kubectlFor`) without
+  running `kubectl`. A valid name is passed as
   one `--context=<name>` argument, never as a separate value, so it cannot
   become another option.
 - **Check result semantics** (P3-2, P3-3, decided 2026-09-28; M6 rows
@@ -635,10 +636,13 @@ authorization plus README and `history.md` updates:
   Dependabot groups them (`codeql-action` and `artifact-actions` in
   `.github/dependabot.yml`, since `78db94e`; the first grouped PRs were #18
   and #19). The artifact actions and `actions/attest` run only in `cd.yml`,
-  so PR checks do not cover them. Test them with a `workflow_dispatch` CD run.
-  Its `Create GitHub Release` step (`softprops/action-gh-release`) runs only
-  for tags, so no run before a release exercises it. Read that action's
-  release notes before bumping it.
+  so PR checks do not cover them. Test them with a `workflow_dispatch` CD run,
+  which attests the archives. The `Create GitHub Release` and
+  `Publish pre-release` steps and the whole `image-publish` job (registry
+  push and the image attestation with `push-to-registry`) run only for tags,
+  so only a tag exercises them; use a pre-release tag (`vX.Y.Z-rc.1`) before
+  a stable one. Read `softprops/action-gh-release`'s release notes before
+  bumping it.
 - Actions must run on Node 24. Runners annotate Node 20 actions as
   deprecated, so check the run annotations after every action update.
 - Dependabot opens at most five PRs per ecosystem. When five are open, further

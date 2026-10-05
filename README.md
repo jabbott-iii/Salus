@@ -252,6 +252,8 @@ Salus is organized into focused command groups:
 
 - `salus check` — list and run health checks
 - `salus jobs` — view past health check runs
+- `salus completion` — generate a shell completion script (`bash`, `zsh`,
+  `fish`, or `powershell`)
 - `salus --version` — print the Salus version
 
 #### check
@@ -359,7 +361,7 @@ What each check reports:
 | `docker-status` | Daemon reachable, no unhealthy or restarting containers | Unhealthy or restarting containers; container list unavailable; no `docker` CLI | Daemon unreachable |
 | `kubernetes-status` | Cluster reachable and every node Ready without pressure, or listing nodes is forbidden | Some nodes NotReady; nodes reporting MemoryPressure, DiskPressure, or PIDPressure; readiness unknown; no `kubectl` CLI | Cluster unreachable (a Forbidden answer counts as reachable); no node Ready; invalid `--kube-context` |
 | `kubernetes-pods` | Every pod Ready (completed pods are ignored), no pods, or listing pods is forbidden | Pods in CrashLoopBackOff, Failed, or not Ready; pod list unavailable; no `kubectl` CLI | Invalid `--kube-namespace` or `--kube-context` |
-| `service-uptime` | Service active, or host uptime readable | Service activating or reloading; not Linux or no `systemctl` | Service not active; invalid `--service` |
+| `service-uptime` | Service active, or host uptime readable | Service activating or reloading; not Linux or no `systemctl`; host uptime unavailable | Service not active; invalid `--service` |
 | `systemd-failed` | No failed units | Failed units (up to five are named); systemd not running; not Linux or no `systemctl` | — |
 | `time-sync` | System clock synchronized | Clock not synchronized; status unknown; systemd not running; not Linux or no `timedatectl` | — |
 | `cert-expiry` | Valid for at least `--cert-warn-days` more days | Expires within `--cert-warn-days` | Expired or not yet valid; file missing, unreadable, larger than 1 MiB, or without a certificate |
@@ -536,7 +538,8 @@ file for new runs; the file itself does not shrink.
 `jobs diff` matches results by check and target. It lists each result whose
 status changed (marked as the old and new status, for example
 `[PASS -> WARN]`), results only in the newer run (`added`), and results only
-in the older run (`removed`), followed by the message from the newer run.
+in the older run (`removed`), each followed by its message (from the newer
+run, or from the older run for `removed` results).
 `jobs diff --json` prints `from` and `to` (job objects as above), `changes`
 (objects with `key`, `target` when there is one, `change` — `worse`,
 `better`, `added`, or `removed` — `from` unless the result was added, `to`
@@ -583,8 +586,8 @@ reported on stderr, also with exit code `3`.
 
 Salus stores job history in a SQLite database. The database is created on the
 first command that needs it (`check run` without `--no-save`, `check list`,
-`jobs list`, `jobs show`, `jobs prune`); `--help`, `--version`, and
-`check run --no-save` never create it.
+`jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`); `--help`,
+`--version`, `completion`, and `check run --no-save` never create it.
 
 | Setting | Default | Purpose |
 |---|---|---|
@@ -706,12 +709,13 @@ docker pull ghcr.io/jabbott-iii/salus:X.Y.Z
 | Tag | Points to |
 |---|---|
 | `X.Y.Z` | That release |
-| `X.Y` | The newest stable release of that minor version |
+| `X.Y` | The most recently published stable release of that minor version |
 | `latest` | The most recently published stable release |
 | `X.Y.Z-amd64`, `X.Y.Z-arm64` | One architecture of that release |
 
-Pre-releases (tags such as `v1.2.0-rc.1`) get only their own version tag,
-such as `1.2.0-rc.1`. In the image, `salus --version` reports the release tag,
+Pre-releases (tags such as `v1.2.0-rc.1`) get only their own version tags
+(`1.2.0-rc.1`, `1.2.0-rc.1-amd64`, and `1.2.0-rc.1-arm64`) and never move
+`X.Y` or `latest`. In the image, `salus --version` reports the release tag,
 for example `salus version v1.1.0`. To check that an image was built by this
 repository's release workflow, see
 [Verifying build provenance](#verifying-build-provenance-optional).
@@ -741,8 +745,8 @@ Note:
    needs a one-time ownership fix (see
    [Upgrading from 1.0.0](#upgrading-from-100)).
  - The `docker-status`, `kubernetes-status`, `kubernetes-pods`,
-   `systemd-failed`, and `time-sync` checks are not supported inside the
-   container. The image does not include the `docker`, `kubectl`,
+   `systemd-failed`, and `time-sync` checks, and `service-uptime` with
+   `--service`, are not supported inside the container. The image does not include the `docker`, `kubectl`,
    `systemctl`, or `timedatectl` tools, so those checks report `WARN` (for
    example `... CLI not found in PATH`). Run the `salus` binary on the host
    for them. Do not mount the Docker socket into the container: it gives the
@@ -786,6 +790,7 @@ pull request.
 │   ├── health*.go        Check registry, thresholds, and the individual checks
 │   ├── report.go         Text and JSON output, exit codes
 │   ├── report-formats.go Nagios, Prometheus, and JUnit output; atomic --output files
+│   ├── report-files_*.go Keeps an existing --output file's group (per OS)
 │   ├── database*.go      Database location, file permissions, GORM models
 │   ├── scan-store.go     Job and result storage
 │   ├── scan-history.go   jobs diff and jobs stats

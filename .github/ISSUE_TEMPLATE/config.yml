@@ -3,5 +3,5 @@
 blank_issues_enabled: false
 contact_links:
   - name: Report a security vulnerability
-    url: https://github.com/jabbott-iii/Salus/blob/main/CONTRIBUTING.md#security-issues
-    about: Do not open a public issue for a vulnerability; contact the code owner privately as described here.
+    url: https://github.com/jabbott-iii/Salus/security/advisories/new
+    about: Report vulnerabilities privately through GitHub's private vulnerability reporting (see SECURITY.md), never in a public issue.

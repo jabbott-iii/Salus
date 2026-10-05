@@ -3,8 +3,8 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7; P7
-run-hardening changes added uncommitted on top of `b16129f`).
+Last reviewed: 2026-10-05 (against `5919264`: M7 run hardening was committed
+in `7060887` and the P8-1 container image release in `5919264`).
 
 ## Directory structure
 
@@ -64,11 +64,14 @@ Salus/
 │   ├── health-resources_{darwin,windows}_test.go  Live sysctl / kernel32 reads on CI runners
 │   ├── health-{systemd,pods,certs,sshd}_test.go  New checks: fake tools, generated certificates,
 │   │                                   sshd_config fixture trees
+│   ├── health-sshd_posix_test.go  FIFO cases for --cert files and sshd_config includes (!windows)
 │   ├── report.go               Text/JSON output (outcomes; jobs for jobs list/show --json), WorstStatus,
 │   │                           exit codes (ExitCodeFor, ExitStatusError, ExitCode)
 │   ├── report-formats.go       writeReport: Nagios, Prometheus text format, JUnit XML;
 │   │                           writeFileAtomic for --output
 │   ├── report-formats_test.go  Golden output per format, escaping, atomic writes
+│   ├── report-files_unix.go    keepGroup: an existing --output file keeps its group (!windows)
+│   ├── report-files_windows.go keepGroup no-op
 │   ├── database.go             GORM models, NewDatabase/OpenDatabase (owner-only file), connection
 │   │                           defaults, prepareDatabase (schemaVersion in PRAGMA user_version,
 │   │                           migrate + seed in one immediate transaction, read-only fallback), Close
@@ -101,6 +104,7 @@ Salus/
 ├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001;
 │                               ARG VERSION, OCI labels (published to ghcr.io by cd.yml)
 ├── .dockerignore               Keeps .git, .env, *.db, IDE/CI files out of the build context
+├── .gitignore                  Binaries, coverage output, *.db, .env, go.work
 ├── Makefile                    Dev targets (build, test, vet, lint, fmt, cover) + release tagging
 ├── .golangci.yml               golangci-lint v2 config: pinned linter set (P4-3), tests analyzed
 ├── AGENTS.md                   Agent/contributor operating rules
@@ -119,9 +123,8 @@ locally but is empty and untracked.
 ```mermaid
 flowchart LR
     main["main.go run()"] --> Root["newRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
-    main -. "lazy DatabaseOpener" .-> Open["OpenDatabase<br/>(database.go)"]
-    Open --> dbpath["DatabasePath<br/>SALUS_DB_PATH or per-user default<br/>(database-path.go)"]
-    Open --> NewDatabase["NewDatabase<br/>0700 dir / 0600 file"]
+    main -. "lazy DatabaseOpener" .-> dbpath["DatabasePath<br/>SALUS_DB_PATH or per-user default<br/>(database-path.go)"]
+    main -. "lazy DatabaseOpener" .-> Open["OpenDatabase<br/>0700 dir / 0600 file<br/>(database.go)"]
     Open --> Prepare["prepareDatabase<br/>user_version fast path, else one<br/>immediate transaction: AutoMigrate + seed"]
     Prepare --> Seed["seedCatalog<br/>(seed.go)"]
 
@@ -152,7 +155,7 @@ flowchart LR
     RunChecks --> Files["--cert files (crypto/x509)"]
     RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket and TCP, PATH,<br/>sshd_config)"]
 
-    NewDatabase --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)<br/>_busy_timeout=5000, _txlock=immediate")]
+    Open --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)<br/>_busy_timeout=5000, _txlock=immediate")]
     Prepare --> SQLite
     Seed --> SQLite
     RecordScan --> SQLite
@@ -225,7 +228,7 @@ erDiagram
         uint ID PK
         time StartedAt
         time FinishedAt "nullable"
-        string Status "running|completed|failed"
+        string Status "completed (RecordScan writes the job in one transaction)"
         string Summary
     }
     SCAN_RESULT {

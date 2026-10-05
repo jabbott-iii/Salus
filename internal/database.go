@@ -277,7 +277,7 @@ type ScanJob struct {
 	ID         uint `gorm:"primaryKey"`
 	StartedAt  time.Time
 	FinishedAt *time.Time
-	Status     string // "running", "completed", or "failed"
+	Status     string // "completed": RecordScan creates and completes a job in one transaction
 	Summary    string
 }
 

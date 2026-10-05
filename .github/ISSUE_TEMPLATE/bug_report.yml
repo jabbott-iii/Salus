@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         Thanks for reporting a problem. Please search existing issues first.
-        Do not report security vulnerabilities here; follow [Security issues in CONTRIBUTING.md](https://github.com/jabbott-iii/Salus/blob/main/CONTRIBUTING.md#security-issues) instead.
+        Do not report security vulnerabilities here; report them privately as described in [SECURITY.md](https://github.com/jabbott-iii/Salus/blob/main/SECURITY.md) instead.
   - type: input
     id: version
     attributes:

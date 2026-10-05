@@ -410,27 +410,20 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   windows), with licenses taken from each module's license file.
 - `CONTRIBUTING.md` was emptied in `7235211`. It was restored from history and
   expanded on 2026-09-27 (see `history.md`).
-- `AGENTS.md` refers to "`CONTRIBUTING.md `" with a trailing space in two
-  places. Cosmetic.
+- `AGENTS.md` referred to "`CONTRIBUTING.md `" with a trailing space in two
+  places. Cosmetic. Resolved: no longer present (checked 2026-10-05).
 
 ### Verification environment (2026-09-27 local session)
 A later session on the maintainer's workstation had Go 1.26.8, network access
 to `proxy.golang.org` and `vuln.go.dev`, and an authenticated GitHub CLI.
 golangci-lint v2.13.2, actionlint 1.7.12, and govulncheck v1.8.0 were built
-from source into a scratch directory. Limits:
-- The user cannot reach the Docker socket (permission denied), so the SEC-003
-  build-context check was not possible.
-- The fine-grained token cannot dispatch workflows (HTTP 403 on
-  `workflow_dispatch`), read Code Scanning alerts, or read branch protection.
-- The installed GitHub CLI (2.45.0) predates `gh attestation`.
+from source into a scratch directory. The SEC-003 build-context check, manual
+workflow runs, Code Scanning alerts, and branch protection settings could not
+be checked from it; they are listed as maintainer steps in `plan.md`.
 
-On 2026-09-28, to validate SEC-006:
-- GitHub CLI 2.101.0 was built from source into the scratch directory. It was
-  run with its own `GH_CONFIG_DIR` and XDG directories, so the installed
-  2.45.0 configuration was not touched.
-- `gh attestation verify` refuses to run without authentication, even for a
-  public repository (exit 4). The existing login's token was passed through
-  the environment for those read-only calls and never printed.
+On 2026-09-28, to validate SEC-006, GitHub CLI 2.101.0 was built from source
+and run with its own configuration directories. `gh attestation verify` needs
+a GitHub login even for a public repository (exit 4 without one).
 
 ### Verification environment (2026-09-27 analysis)
 The analysis environment could not reach `proxy.golang.org` or `go.dev`. The

@@ -28,4 +28,6 @@ Closes #
 
 ## Security notes
 
-<!-- Call out security-sensitive changes for review, or write "None". -->
+<!-- Call out security-sensitive changes for review, or write "None".
+Do not describe an undisclosed vulnerability here; report it privately as
+described in SECURITY.md. -->

@@ -5,13 +5,15 @@ Rules for this file are in `AGENTS.md` ("Security Issue Tracking"): never
 delete items, mark `Closed` only after remediation and validation, and never
 regress a documented remediation.
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and P3-7,
-and the uncommitted `SECURITY.md` policy (P4-4); v1.0.2 is at `08b2faa`). The
-M6 review of new inputs and outputs found no new issue; its controls are listed
-under "Existing controls observed". SEC-009 is Closed; SEC-003 and SEC-005
-still wait on maintainer checks. SEC-010 (found in the 2026-10-04
-production-readiness review) is In Progress: implemented and validated
-locally as P7-3, uncommitted, waiting for CI on macOS and Windows.
+Last reviewed: 2026-10-05 (against `5919264`, which carries M5, M6, P3-7, the
+`SECURITY.md` policy (P4-4), M7, and the P8-1 container image release; v1.0.2
+is at `08b2faa`). The M6 review of new inputs and outputs found no new issue;
+its controls are listed under "Existing controls observed". SEC-009 and
+SEC-010 are Closed; SEC-003 and SEC-005 still wait on maintainer checks. A
+2026-10-05 scan of the working tree and of every file version in the git
+history (detect-secrets 1.5.0 plus pattern searches for keys, tokens, and
+personal data) found no secrets. SEC-010 is fixed on `main` but not yet in a
+release: v1.0.2 is still affected until v1.1.0 ships.
 
 ## Threat model summary
 
@@ -183,8 +185,7 @@ locally as P7-3, uncommitted, waiting for CI on macOS and Windows.
     branch rules when merging from it. Run the `CONTRIBUTING.md` validation
     locally before merging, and let CI pass on `main` (plus a manual CD run)
     before tagging the fixed release.
-  - Not verified by this review: the setting itself, because this session
-    cannot reach the GitHub API for the repository. Check it with
+  - Not verified by this review: the setting itself. Check it with
     `gh api repos/jabbott-iii/Salus/private-vulnerability-reporting`, which
     should return `{"enabled": true}`.
 - Since v1.0.2 (`08b2faa`), the CD `package` job attests build provenance for
@@ -194,7 +195,7 @@ locally as P7-3, uncommitted, waiting for CI on macOS and Windows.
   which has `contents: write` but cannot sign.
 
 Not verified during this review: the current Code Scanning alert state on
-GitHub, because the available token cannot read it.
+GitHub.
 
 ## Issues
 
@@ -317,8 +318,7 @@ GitHub, because the available token cannot read it.
     docker image rm salus-ctx-check && rm .env
     ```
 
-    Neither the analysis environment nor the linked computer's workspace had
-    a Docker daemon available.
+    No Docker daemon was available to the review.
 
 ### SEC-004: SQLite database created with default permissions in the working directory
 
@@ -415,8 +415,8 @@ GitHub, because the available token cannot read it.
   - For the unmodified tree it reported `No vulnerabilities found.`
   - The branch rulesets block branch deletion, but the repository admin role
     can bypass them, so the maintainer can delete the throwaway branch.
-  - The agent session could not push the branch itself, because `AGENTS.md`
-    forbids it from creating commits.
+  - The review did not push the branch itself: `AGENTS.md` leaves commits to
+    the maintainer.
 
   Operational note: #15 and #17 each bump only one `github/codeql-action`
   sub-action. #17 fails the CodeQL job (`Loaded a configuration file for
@@ -669,8 +669,8 @@ GitHub, because the available token cannot read it.
 
 ### SEC-010: `--timeout` does not bound external commands, and their output is unbounded
 
-- **Status:** In Progress (implemented 2026-10-04 as P7-3, uncommitted;
-  awaiting CI on macOS and Windows)
+- **Status:** Closed (2026-10-04; fixed in `7060887`, first released in
+  v1.1.0)
 - **Affected component:** `internal/health.go` (`CheckOptions.command`, which
   called `exec.CommandContext(...).CombinedOutput()`)
 - **Risk:** Low to Medium (availability). Found in the 2026-10-04
@@ -696,7 +696,10 @@ GitHub, because the available token cannot read it.
   leftover pipe holder, output cap), fake-runner tests of the timeout
   message, the reproduction above returning within about one second, and CI
   green on ubuntu, macOS, and Windows.
-- **Resolution:** Pending CI. Implemented in the working tree on 2026-10-04:
+- **Resolution:** Implemented on 2026-10-04 as P7-3 and committed in
+  `7060887`. The maintainer reported CI green on ubuntu, macOS, and Windows
+  for that commit the same day, which completes the validation (run numbers
+  not recorded here). Details:
   - `runExternal` (`health-exec.go`): `WaitDelay` of 1s, `maxCommandOutput`
     8 MiB (`limitedBuffer` keeps draining the pipe and the command fails
     beyond the limit), and `exec.ErrWaitDelay` after a successful exit
@@ -711,7 +714,7 @@ GitHub, because the available token cannot read it.
     `TestRunExternalStopsWaitingForLeftoverProcess`,
     `TestRunExternalRejectsOversizedOutput`, and `TestCommandReportsTimeout`
     pass, and fail when the group kill or `WaitDelay` is removed. macOS and
-    Windows compile and vet; their tests have not run yet.
+    Windows compiled and vetted locally; their tests then ran in CI.
   - Known limits: tools now run in a background process group on a
     terminal, so a tool that prompts on `/dev/tty` is stopped and times out
     (documented in the README upgrade notes). A goroutine blocked in a system

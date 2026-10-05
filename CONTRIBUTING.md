@@ -63,7 +63,7 @@ SALUS_DB_PATH="$(mktemp -d)/salus.db" ./salus check run --only misconfig
 
 ## Validation
 
-Run these from the repository root before opening a pull request. They mirror
+Run these from the repository root before opening a pull request. They include
 the checks in `.github/workflows/ci.yml`.
 
 ```bash
@@ -170,7 +170,11 @@ Releases are cut by maintainers. `make release VERSION=vX.Y.Z` creates and
 pushes an annotated tag, which triggers the CD workflow. When a change touches
 `.github/workflows/cd.yml` or the actions it uses, run CD manually first
 (`workflow_dispatch`): it builds, smoke-tests, packages, and attests the
-archives, and it skips only the `Create GitHub Release` step.
+archives, and builds and smoke-tests the container images. It skips the
+`Create GitHub Release` and `Publish pre-release` steps and the
+`image-publish` job (registry push and image attestation), which run only
+for tags; a pre-release tag such as `vX.Y.Z-rc.1` exercises them before a
+stable release.
 
 ## License
 

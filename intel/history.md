@@ -870,3 +870,54 @@ reconstructed from commit messages and diffs, not first-hand records.
     remote session cannot write `.github/`.
   - Uncommitted at the time of writing.
 
+## 2026-10-05: Sensitive-data sweep and documentation drift review
+
+- Change:
+  - Recorded commits: M7 as `7060887` and P8-1 as `5919264`, both on `main`.
+    The maintainer reported CI, Security, and Docker green on 2026-10-04
+    (run numbers not recorded). P4-3, P4-5, and P7-1 to P7-8 are marked Done,
+    SEC-010 is Closed, and P8-1 waits for the maintainer's CD checks.
+  - Sensitive-data sweep: detect-secrets 1.5.0 and pattern searches (keys,
+    tokens, credentials, private keys, local paths, personal data) over the
+    working tree and all 379 file versions in the history found no secrets;
+    the hits were a pinned SHA-256, the word "password" in documentation, and
+    a test URL whose credentials Salus is expected to strip. Details of the
+    maintainer's workstation and token scopes, and of review-session
+    limitations, were removed from `notes.md`, `cybersec.md`, and `plan.md`.
+    Entries in this file were left as written (append-only); none contains a
+    secret.
+  - Documentation drift fixed:
+    - README: `completion` command; `jobs diff` and `jobs stats` also create
+      the database; `service-uptime` WARN when host uptime is unavailable;
+      `service-uptime --service` is unsupported in the container; message
+      source for removed `jobs diff` results; pre-release image tags; `X.Y`
+      tag wording; `report-files_*.go` in the project structure.
+    - `CONTRIBUTING.md`: what a manual CD run covers (container images; the
+      image publish and pre-release steps run only for tags); the validation
+      commands include, rather than mirror, CI.
+    - `maint.md`: location of `DatabasePathEnv`, `jobs diff` argument rule,
+      `--kube-context` also failing `kubernetes-pods`, and which CD parts only
+      a tag exercises.
+    - `map.md`: missing files (`report-files_*.go`,
+      `health-sshd_posix_test.go`, `.gitignore`), the database diagram
+      (`main` resolves the path; `OpenDatabase` opens and prepares), and the
+      `ScanJob.Status` values; same fix to the comment in `database.go`.
+  - The P4-4 `.github/` template changes had never been applied
+    (`config.yml` still pointed security reports at `CONTRIBUTING.md` and
+    "contact the code owner privately"); they were delivered again as
+    `salus-docs-github.patch` (`config.yml`, `bug_report.yml`,
+    `pull_request_template.md`).
+- Files: `README.md`, `CONTRIBUTING.md`, `internal/database.go` (comment
+  only), `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
+  `intel/plan.md`, `intel/notes.md`, `intel/history.md`; patch for
+  `.github/ISSUE_TEMPLATE/config.yml`, `.github/ISSUE_TEMPLATE/bug_report.yml`,
+  `.github/pull_request_template.md`.
+- Reason / reference: maintainer request on 2026-10-05 to remove security
+  sensitive information and correct documentation drift. An independent
+  audit compared README, CONTRIBUTING, SECURITY, `map.md`, and `maint.md`
+  with the code, the CLI help, the Makefile, and the workflows.
+  - Not changed: the personal e-mail address in commit metadata (removing it
+    needs a history rewrite, which `AGENTS.md` forbids), and the SEC items in
+    `cybersec.md`, which `AGENTS.md` requires to be kept.
+  - Uncommitted at the time of writing.
+
