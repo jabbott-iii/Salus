@@ -28,19 +28,19 @@ HTTP interface is ever added.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `run` delegates to `runWith`, which takes the command constructor (a test seam) and recovers a panic as an internal error (exit 3, P7-6). `main()` only calls `os.Exit(run(...))`. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`) and flag parsing. `check run` validates every flag (`validateLimits`, `parseFailOn`, the format, `--retain`, and the `cert-expiry` target rule) before opening the database, runs the checks under a context that SIGINT and SIGTERM cancel (`stopSignalContext`), applies `--fail-on` (`exitCodeWithFailOn`), routes the report to stdout or `--output`, then saves the run and prunes for `--retain`, and returns `*ExitStatusError` for a non-zero result. `jobs prune`, `jobs stats --since`, and `check run --retain` parse ages with `parseAge`. |
-| Checks | `internal/health.go`, `../pkg` (with `_unix.go`/`_other.go`), `internal/health-thresholds.go`, `../pkg`, `internal/health-resources_other.go`, `../pkg`, `../pkg`, `internal/health-certs.go`, `internal/health-sshd.go` | Check registry and per-target expansion (`checkTargets`), per-check and per-run time limits (`runCheck`), external command execution (`opts.command`, `runExternal`), thresholds, and the individual check functions. |
-| Reporting | `internal/report.go`, `../pkg` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), Nagios, Prometheus, and JUnit rendering (`writeReport`), atomic `--output` files (`writeFileAtomic`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
-| Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `../pkg`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, pruning, run comparison (`diffResults`), and statistics (`ScanStats`). |
+| Entry point | `main.go`, `pkg/version.go` | `run()` builds the root command with the build `version` (`--version`; the variable stays in `main.go` so `-X main.version` applies, and `pkg.NewVersionedRootCmd` attaches it) and a lazy, memoized database opener (`pkg.DatabasePath` + `pkg.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `run` delegates to `runWith`, which takes the command constructor (a test seam) and recovers a panic as an internal error (exit 3, P7-6). `main()` only calls `os.Exit(run(...))`. |
+| CLI | `pkg/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`) and flag parsing. `check run` validates every flag (`validateLimits`, `parseFailOn`, the format, `--retain`, and the `cert-expiry` target rule) before opening the database, runs the checks under a context that SIGINT and SIGTERM cancel (`stopSignalContext`), applies `--fail-on` (`exitCodeWithFailOn`), routes the report to stdout or `--output`, then saves the run and prunes for `--retain`, and returns `*ExitStatusError` for a non-zero result. `jobs prune`, `jobs stats --since`, and `check run --retain` parse ages with `parseAge`. |
+| Checks | `pkg/health.go`, `pkg/health-exec.go` (with `_unix.go`/`_other.go`), `pkg/health-thresholds.go`, `pkg/health-resources_linux.go`, `pkg/health-resources_other.go`, `pkg/health-systemd.go`, `pkg/health-pods.go`, `pkg/health-certs.go`, `pkg/health-sshd.go` | Check registry and per-target expansion (`checkTargets`), per-check and per-run time limits (`runCheck`), external command execution (`opts.command`, `runExternal`), thresholds, and the individual check functions. |
+| Reporting | `pkg/report.go`, `pkg/report-formats.go` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), Nagios, Prometheus, and JUnit rendering (`writeReport`), atomic `--output` files (`writeFileAtomic`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
+| Persistence | `pkg/database.go`, `pkg/database-path.go`, `pkg/scan-store.go`, `pkg/scan-history.go`, `pkg/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, pruning, run comparison (`diffResults`), and statistics (`ScanStats`). |
 
-All application code lives in the single package
-`github.com/jabbott-iii/Salus/internal`. Dependency direction today is:
+All application code lives in the single package `pkg`
+(`github.com/jabbott-iii/Salus/pkg`). Dependency direction today is:
 CLI → checks, reporting, persistence. Check and report code does not call
 persistence functions or touch the database, and must stay that way. The
 only shared symbol is the `DatabasePathEnv` constant, which the `misconfig`
 check reads. `DatabasePathEnv` and `DefaultDatabasePath` are defined once in
-`internal/database-path.go` and used by `main`. See `map.md` for diagrams.
+`pkg/database-path.go` and used by `main`. See `map.md` for diagrams.
 
 ### Runtime flow
 
@@ -339,7 +339,7 @@ authorization plus README and `history.md` updates:
   <cause>` when the check or run ended first). Arguments are passed
   separately with no shell. Tests replace them through the unexported `lookPath` and
   `runCommand` fields of `CheckOptions` (see `fakeToolOptions` in
-  `../pkg`). Validate any user-supplied argument before
+  `pkg/checks_test.go`). Validate any user-supplied argument before
   passing it, and end option parsing with `--` before it where the tool
   supports it (see `SEC-001` in `cybersec.md`; `--service` is validated by
   `validUnitName` and passed as `systemctl is-active -- <name>`).
@@ -529,7 +529,7 @@ authorization plus README and `history.md` updates:
 - Tests must be deterministic and must not execute Docker, Kubernetes, or
   systemd tools, or depend on host resource levels. Use `fakeToolOptions` for
   external tools, and fixture data with the `parse*` functions for `/proc`
-  contents (`internal/health-resources_linux_test.go`).
+  contents (`pkg/health-resources_linux_test.go`).
 - Tests that read environment-dependent checks (`misconfig`) call
   `isolateMisconfigEnv`. It also points `KUBECONFIG` and `DOCKER_HOST` at
   missing files, clears `DOCKER_TLS_VERIFY`, points `PATH` at an owner-only

@@ -11,11 +11,13 @@ in `7060887` and the P8-1 container image release in `5919264`).
 ```text
 Salus/
 ├── main.go                     main() → run() → runWith(): open/close DB, seed catalog, run Cobra root,
-│                               map exit code; recovers panics as exit 3 (P7-6)
+│                               map exit code; recovers panics as exit 3 (P7-6); build version
+│                               (var version, set via -X main.version) passed in by newRootCmd
 ├── main_test.go                End-to-end exit codes and persistence through run(); panic → exit 3
-├── version.go                  Build version (set via -X main.version) + root command wiring
-├── version_test.go
-├── internal/                   Single Go package holding all application logic
+│                               (stays beside main.go: it tests run/runWith in package main)
+├── pkg/                        Single Go package (package pkg) holding all application logic
+│   ├── version.go              NewVersionedRootCmd: root command + build version (--version)
+│   ├── version_test.go
 │   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show|prune|diff|stats;
 │   │                           check run flags (targets, thresholds, --timeout/--check-timeout/
 │   │                           --run-timeout, --format/--output, --fail-on, --retain) +
@@ -122,7 +124,7 @@ locally but is empty and untracked.
 
 ```mermaid
 flowchart LR
-    main["main.go run()"] --> Root["newRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
+    main["main.go run()"] --> Root["newRootCmd (main.go)<br/>→ NewVersionedRootCmd (version.go)<br/>→ NewRootCmd (logic-cli.go)"]
     main -. "lazy DatabaseOpener" .-> dbpath["DatabasePath<br/>SALUS_DB_PATH or per-user default<br/>(database-path.go)"]
     main -. "lazy DatabaseOpener" .-> Open["OpenDatabase<br/>0700 dir / 0600 file<br/>(database.go)"]
     Open --> Prepare["prepareDatabase<br/>user_version fast path, else one<br/>immediate transaction: AutoMigrate + seed"]

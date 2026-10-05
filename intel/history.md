@@ -921,3 +921,57 @@ reconstructed from commit messages and diffs, not first-hand records.
     `cybersec.md`, which `AGENTS.md` requires to be kept.
   - Uncommitted at the time of writing.
 
+
+## 2026-10-05: Root Go files moved into `pkg`; package renamed from `internal` to `pkg` (uncommitted)
+- Change:
+  - Every file under `pkg/` now declares `package pkg` (was `package
+    internal`; the directory itself was renamed from `internal/` to `pkg/` in
+    `08faf9b`). `main.go` and `main_test.go` refer to `pkg.X` instead of
+    `internal.X`.
+  - `version.go` and `version_test.go` moved from the repository root to
+    `pkg/`. The root command wiring is now `pkg.NewVersionedRootCmd(openDB,
+    version)`. `var version` stays in `main.go`, so the release ldflag
+    `-X main.version=...` in `cd.yml` and the `Dockerfile` is unchanged;
+    `newRootCmd` in `main.go` passes it in.
+  - `main_test.go` stays at the root beside `main.go`: it tests `run` and
+    `runWith` in package `main`, which `pkg` cannot import.
+  - No behavior change. No CI, Dockerfile, Makefile, or dependency changes.
+- Files: `main.go`, `main_test.go`, `pkg/*.go` (package clause),
+  `pkg/version.go` and `pkg/version_test.go` (moved from the root),
+  `README.md`, `intel/maint.md`, `intel/map.md`, `intel/history.md`.
+- Reason / reference: maintainer request on 2026-10-05 to keep only `main.go`
+  at the root and name the package `pkg`. The maintainer chose to keep
+  `main_test.go` beside `main.go` and `var version` in `main.go`.
+  - Validation: Go 1.26.8 (built from source in a sandbox; the module proxy
+    was unreachable, so vanity-path modules were resolved with scratch-only
+    `replace` directives that are not in the repository): `go build`,
+    `go vet ./...` (linux; darwin and windows with `CGO_ENABLED=0`),
+    `gofmt -l` (clean), `go test -count=1 ./...` (440 pass, 2 skip, identical
+    to `08faf9b`); `-ldflags "-X main.version=v0.0.0-verify"` prints
+    `salus version v0.0.0-verify`; CLI output and exit codes for help,
+    completion, `check list`, a JSON check run, and an unknown command match
+    `08faf9b`.
+  - Not run: golangci-lint, `go test -race`, macOS and Windows test runs, and
+    the CD and Docker workflows.
+
+## 2026-10-05: Documentation cleanup after the `internal` → `pkg` rename (uncommitted)
+- Change:
+  - Restored 17 file references that the `08faf9b` rename had replaced with
+    `../pkg` (4 in `cybersec.md`, 1 in `notes.md`, 5 in `plan.md`, 7 in
+    `maint.md`), using the text from `46e2813`. After the restore,
+    `cybersec.md`, `notes.md`, and `plan.md` matched `46e2813` exactly.
+  - Current-state references now name `pkg/`: every file path in `maint.md`,
+    the test example in `CONTRIBUTING.md`, the comment in `.golangci.yml`
+    (comment only; the linter set is unchanged), and the proposed package
+    split in P5-1 (`plan.md`).
+  - Historical records keep `internal/`, the path at the time they were
+    written: closed `cybersec.md` items and the SEC-003 evidence, completed
+    `plan.md` items and past validation results, resolved `notes.md` entries,
+    and earlier entries in this file.
+  - Earlier entries in this file still contain `../pkg` where `08faf9b`
+    replaced paths. They were left as they are because this file is
+    append-only; the original text is in `git show 46e2813:intel/history.md`.
+- Files: `intel/maint.md`, `intel/cybersec.md`, `intel/notes.md`,
+  `intel/plan.md`, `CONTRIBUTING.md`, `.golangci.yml`, `intel/history.md`.
+- Reason / reference: maintainer request on 2026-10-05 to clean up the files
+  related to the rename.

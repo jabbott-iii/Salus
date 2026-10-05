@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package pkg
 
 // syntheticModes reports whether path's POSIX mode bits are made up. Only WSL
 // drvfs mounts on Linux are detected (health-mounts_linux.go); the permission

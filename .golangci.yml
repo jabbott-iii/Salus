@@ -7,7 +7,7 @@ version: "2"
 
 run:
   # Analyze test files too. intel/maint.md section 4 relies on this: the
-  # functions in internal/health-decode.go are called on every platform only
+  # functions in pkg/health-decode.go are called on every platform only
   # by tests.
   tests: true
 

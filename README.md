@@ -784,8 +784,9 @@ pull request.
 
 ```text
 .
-├── main.go, version.go   Entry point: runs the CLI, maps results to exit codes, --version
-├── internal/             All application code (one Go package)
+├── main.go               Entry point: runs the CLI, maps results to exit codes, --version
+├── pkg/                  All application code (one Go package, package pkg)
+│   ├── version.go        Root command with the build version attached
 │   ├── logic-cli.go      Cobra commands and flags
 │   ├── health*.go        Check registry, thresholds, and the individual checks
 │   ├── report.go         Text and JSON output, exit codes

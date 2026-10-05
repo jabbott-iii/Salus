@@ -26,6 +26,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// version is reported by --version. Release builds set it with
+// -ldflags "-X main.version=vX.Y.Z" (see .github/workflows/cd.yml).
+var version = "dev"
+
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -37,20 +41,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 	return runWith(newRootCmd, args, stdout, stderr)
 }
 
+// newRootCmd builds the Salus command tree with the build version attached,
+// which makes Cobra provide the --version flag.
+func newRootCmd(openDB pkg.DatabaseOpener) *cobra.Command {
+	return pkg.NewVersionedRootCmd(openDB, version)
+}
+
 // runWith is run with the command tree's constructor as a parameter, so
 // tests can exercise the panic handling.
-func runWith(build func(internal.DatabaseOpener) *cobra.Command, args []string, stdout, stderr io.Writer) (code int) {
+func runWith(build func(pkg.DatabaseOpener) *cobra.Command, args []string, stdout, stderr io.Writer) (code int) {
 	// The database is opened only when a command needs it, at most once.
-	var db *internal.Database
-	openDB := func() (*internal.Database, error) {
+	var db *pkg.Database
+	openDB := func() (*pkg.Database, error) {
 		if db != nil {
 			return db, nil
 		}
-		path, err := internal.DatabasePath()
+		path, err := pkg.DatabasePath()
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize database: %w", err)
 		}
-		opened, err := internal.OpenDatabase(path)
+		opened, err := pkg.OpenDatabase(path)
 		if err != nil {
 			return nil, fmt.Errorf("failed to initialize database: %w", err)
 		}
@@ -63,8 +73,8 @@ func runWith(build func(internal.DatabaseOpener) *cobra.Command, args []string, 
 		}
 		if err := db.Close(); err != nil {
 			_, _ = fmt.Fprintf(stderr, "Error: %v\n", err)
-			if code == internal.ExitCodePass {
-				code = internal.ExitCodeError
+			if code == pkg.ExitCodePass {
+				code = pkg.ExitCodeError
 			}
 		}
 	}()
@@ -75,7 +85,7 @@ func runWith(build func(internal.DatabaseOpener) *cobra.Command, args []string, 
 	defer func() {
 		if r := recover(); r != nil {
 			_, _ = fmt.Fprintf(stderr, "Error: internal error: %v\n%s", r, debug.Stack())
-			code = internal.ExitCodeError
+			code = pkg.ExitCodeError
 		}
 	}()
 
@@ -84,8 +94,8 @@ func runWith(build func(internal.DatabaseOpener) *cobra.Command, args []string, 
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)
 	cmd, err := rootCmd.ExecuteC()
-	code = internal.ExitCode(err)
-	if code == internal.ExitCodeError {
+	code = pkg.ExitCode(err)
+	if code == pkg.ExitCodeError {
 		// The command tree silences Cobra's own error printing, so errors are
 		// reported here, on stderr only, and never mix into stdout or --json.
 		if cmd == nil {

@@ -214,7 +214,7 @@ GitHub.
   pass `--` before the unit name (`systemctl is-active -- <name>`). Return
   `StatusFail` with a clear message for invalid names.
 - **Validation:** Unit tests (using `fakeToolOptions` in
-  `../pkg`, available since 2026-09-27) show that
+  `internal/checks_test.go`, available since 2026-09-27) show that
   `--host=x`, `-H`, and an empty string are rejected without executing
   `systemctl`, and that `nginx`, `nginx.service`, and `getty@tty1.service` are
   accepted. The gosec G204 finding for the command wrapper
@@ -323,8 +323,8 @@ GitHub.
 ### SEC-004: SQLite database created with default permissions in the working directory
 
 - **Status:** Closed (2026-09-27)
-- **Affected component:** `internal/database-path.go`, `../pkg`
-  (`NewDatabase`), `../pkg` (`checkMisconfiguration`)
+- **Affected component:** `internal/database-path.go`, `internal/database.go`
+  (`NewDatabase`), `internal/health.go` (`checkMisconfiguration`)
 - **Risk:** Low. By default `salus.db` is created in whatever directory Salus
   runs from, with the process umask (commonly `0644`, so world-readable). It
   stores host metadata and the first line of external tool errors, which can
@@ -629,7 +629,7 @@ GitHub.
 ### SEC-009: External tool output reaches the terminal and the database unfiltered
 
 - **Status:** Closed (2026-10-04)
-- **Affected component:** `../pkg` (check messages built from
+- **Affected component:** `internal/health.go` (check messages built from
   `docker`, `kubectl`, and `systemctl` output) and `internal/logic-cli.go`
   (`jobs show` text output)
 - **Risk:** Low. Check messages embed text from external tools: the first

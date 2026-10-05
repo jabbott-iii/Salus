@@ -88,7 +88,7 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
     per-user default, by design.
   - *Update 2026-09-28 (v2.29.0 on the M5 working tree):* six findings. The
     two new ones are G703 (path traversal via taint analysis, HIGH):
-    `os.Stat` in `ownerOnly` and `worldWritablePath` (`../pkg`).
+    `os.Stat` in `ownerOnly` and `worldWritablePath` (`internal/health.go`).
     Both are false positives:
     - The paths come from the invoking user's own `SALUS_DB_PATH`,
       `KUBECONFIG`, `PATH`, and home directory.

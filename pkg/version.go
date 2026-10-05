@@ -14,21 +14,16 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
-import (
-	"github.com/jabbott-iii/Salus/pkg"
-	"github.com/spf13/cobra"
-)
+import "github.com/spf13/cobra"
 
-// version is reported by --version. Release builds set it with
+// NewVersionedRootCmd builds the Salus command tree and attaches the build
+// version, which makes Cobra provide the --version flag. The caller passes
+// main.version, which release builds set with
 // -ldflags "-X main.version=vX.Y.Z" (see .github/workflows/cd.yml).
-var version = "dev"
-
-// newRootCmd builds the Salus command tree and attaches the build version,
-// which makes Cobra provide the --version flag.
-func newRootCmd(openDB internal.DatabaseOpener) *cobra.Command {
-	root := internal.NewRootCmd(openDB)
+func NewVersionedRootCmd(openDB DatabaseOpener, version string) *cobra.Command {
+	root := NewRootCmd(openDB)
 	root.Version = version
 	return root
 }

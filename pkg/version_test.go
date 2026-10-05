@@ -14,7 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package main
+package pkg
 
 import (
 	"bytes"
@@ -24,12 +24,8 @@ import (
 )
 
 func TestRootCmdVersionFlagReportsBuildVersion(t *testing.T) {
-	previous := version
-	version = "v1.2.3-test"
-	t.Cleanup(func() { version = previous })
-
 	// --version is handled by Cobra before any command touches the database.
-	root := newRootCmd(nil)
+	root := NewVersionedRootCmd(nil, "v1.2.3-test")
 	var out bytes.Buffer
 	root.SetOut(&out)
 	root.SetErr(io.Discard)

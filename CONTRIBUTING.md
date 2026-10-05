@@ -123,7 +123,7 @@ request.
   Kubernetes, systemd, or the host's current resource levels. Use fixtures or
   injected fakes instead.
 - Use `t.TempDir()` for files and databases (see `newTestDatabase` in
-  `internal/database_test.go`) and `t.Cleanup()` for teardown.
+  `pkg/database_test.go`) and `t.Cleanup()` for teardown.
 - Run the tests as a normal user, not root: tests that make files unreadable
   skip themselves under root.
 

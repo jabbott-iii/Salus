@@ -16,7 +16,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-package internal
+package pkg
 
 // Threshold accessors for the disk, inode, memory, and CPU load checks. The
 // defaults are in health.go, because check run uses them as flag defaults
