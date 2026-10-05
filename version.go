@@ -17,7 +17,7 @@ limitations under the License.
 package main
 
 import (
-	"github.com/jabbott-iii/Salus/internal"
+	"github.com/jabbott-iii/Salus/pkg"
 	"github.com/spf13/cobra"
 )
 

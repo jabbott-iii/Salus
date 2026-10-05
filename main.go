@@ -22,7 +22,7 @@ import (
 	"os"
 	"runtime/debug"
 
-	"github.com/jabbott-iii/Salus/internal"
+	"github.com/jabbott-iii/Salus/pkg"
 	"github.com/spf13/cobra"
 )
 
@@ -31,7 +31,7 @@ func main() {
 }
 
 // run executes the CLI and returns the process exit code: 0/1/2 for a check
-// run's PASS/WARN/FAIL result, and internal.ExitCodeError for operational
+// run's PASS/WARN/FAIL result, and pkg.ExitCodeError for operational
 // errors. Returning instead of exiting lets the database close first.
 func run(args []string, stdout, stderr io.Writer) int {
 	return runWith(newRootCmd, args, stdout, stderr)

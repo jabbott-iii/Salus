@@ -102,7 +102,7 @@ reconstructed from commit messages and diffs, not first-hand records.
   `internal/health-thresholds.go`, constrained to `//go:build linux`. No
   behavior change on Linux. Added cross-OS lint commands to
   `CONTRIBUTING.md` and the matching rule to `intel/maint.md`.
-- Files: `internal/health.go`, `internal/health-thresholds.go`,
+- Files: `../pkg`, `../pkg`,
   `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/plan.md`
 - Reason / reference: CI run 36305462889 on `586dfe9` failed on macOS at
   `golangci-lint` (7 `unused` findings), and Windows was cancelled by
@@ -138,12 +138,12 @@ reconstructed from commit messages and diffs, not first-hand records.
     end-to-end exit codes through `main.run`. `internal` coverage went from
     66% to 87.7%.
 - Files: `main.go`, `main_test.go`, `database_path.go`,
-  `database_path_test.go`, `internal/database.go`,
-  `internal/database_test.go`, `internal/health.go`,
+  `database_path_test.go`, `../pkg`,
+  `../pkg`, `../pkg`,
   `internal/health-resources_linux.go`, `internal/health_test.go`,
   `internal/checks_test.go`, `internal/health-resources_linux_test.go`,
   `internal/logic-cli.go`, `internal/logic-cli_test.go`, `internal/report.go`,
-  `internal/scan-store.go`, `internal/scan-store_test.go`, `README.md`,
+  `../pkg`, `internal/scan-store_test.go`, `README.md`,
   `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md`,
   `intel/cybersec.md`
 - Reason / reference: Plan milestone M2 (P1-1 to P1-9, plus P1-11). An
@@ -186,7 +186,7 @@ reconstructed from commit messages and diffs, not first-hand records.
     `main`; the logic moved to `internal/database-path.go`.
 - Files: `main.go`, `main_test.go`, `version.go`, `database_path.go`
   (deleted), `database_path_test.go` (deleted), `internal/database-path.go`,
-  `internal/database-path_test.go`, `internal/database.go`,
+  `../pkg`, `internal/database.go`,
   `internal/health.go`, `internal/checks_test.go`, `internal/logic-cli.go`,
   `internal/logic-cli_test.go`, `internal/scan-store.go`,
   `internal/scan-store_test.go`, `README.md`, `CONTRIBUTING.md`,
@@ -340,8 +340,8 @@ reconstructed from commit messages and diffs, not first-hand records.
     reviewed. Every action pin was verified against its upstream tag.
     SEC-006 is In Progress. SEC-005 gained supporting evidence from a local
     run of the vulnerable fixture.
-- Files: `internal/health.go`, `internal/health-thresholds.go`,
-  `internal/logic-cli.go`, `internal/logic-cli_test.go`, `main_test.go`,
+- Files: `../pkg`, `internal/health-thresholds.go`,
+  `internal/logic-cli.go`, `../pkg`, `main_test.go`,
   `Makefile`, `.gitignore`, `.github/workflows/cd.yml`, `README.md`,
   `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
   `intel/notes.md`, `intel/plan.md`, `intel/history.md`
@@ -385,7 +385,7 @@ reconstructed from commit messages and diffs, not first-hand records.
     - the scope of write permissions in `maint.md`;
     - the `check run` sequence diagram in `map.md`.
 - Files: `.github/workflows/cd.yml`, `Makefile`, `internal/logic-cli.go`
-  (comment only), `internal/logic-cli_test.go`, `README.md`,
+  (comment only), `../pkg`, `README.md`,
   `CONTRIBUTING.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
   `intel/plan.md`, `intel/history.md`
 - Reason / reference: the independent review of 2026-09-27. The previous
@@ -456,7 +456,7 @@ reconstructed from commit messages and diffs, not first-hand records.
     `check run --json` shape.
   - `jobs prune --older-than <age> [--dry-run]` (P3-6) deletes old jobs and
     their results in one transaction, comparing times with `julianday`.
-  - Removed the empty `internal/logic-tui.go` and `internal/ui-form.go`
+  - Removed the empty `../pkg` and `../pkg`
     (P5-2, Q-001).
   - SEC-009 (new, fixed): check messages had embedded external tool output
     unfiltered. `RunChecks` and `jobs show` now replace control characters.
@@ -464,10 +464,10 @@ reconstructed from commit messages and diffs, not first-hand records.
     The README gains a per-check PASS/WARN/FAIL table, the misconfig rule ids,
     and an "Upgrading from 1.0.2" section for the changes that can raise exit
     codes.
-- Files: `internal/health.go`, `internal/logic-cli.go`, `internal/report.go`,
+- Files: `../pkg`, `../pkg`, `../pkg`,
   `internal/scan-store.go`, `internal/checks_test.go`,
-  `internal/logic-cli_test.go`, `internal/scan-store_test.go`, `main_test.go`,
-  `internal/logic-tui.go` (deleted), `internal/ui-form.go` (deleted),
+  `../pkg`, `internal/scan-store_test.go`, `main_test.go`,
+  `internal/logic-tui.go` (deleted), `../pkg` (deleted),
   `README.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
   `intel/notes.md`, `intel/plan.md`, `intel/history.md`
 - Reason / reference: plan milestone M5 and P5-2. SEC-009 was found while
@@ -490,7 +490,7 @@ reconstructed from commit messages and diffs, not first-hand records.
     does not start with `-` and has no control characters. It is still passed
     as one `--context=<name>` argument.
   - The `misconfig` permission rules skip WSL drvfs paths (`syntheticModes`,
-    new `internal/health-mounts_linux.go` and `_other.go`). WSL appends the
+    new `../pkg` and `_other.go`). WSL appends the
     Windows `PATH`, whose made-up 0777 modes would otherwise warn on every
     default WSL host.
   - SEC-009: `jobs show --json` now also sanitizes stored messages, because
@@ -511,7 +511,7 @@ reconstructed from commit messages and diffs, not first-hand records.
 - Files: `internal/health.go`, `internal/health-mounts_linux.go` (new),
   `internal/health-mounts_other.go` (new),
   `internal/health-mounts_linux_test.go` (new), `internal/report.go`,
-  `internal/checks_test.go`, `internal/logic-cli_test.go`, `README.md`,
+  `../pkg`, `internal/logic-cli_test.go`, `README.md`,
   `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`, `intel/notes.md`,
   `intel/plan.md`, `intel/history.md`
 - Reason / reference: the independent review of 2026-09-28. The whitespace
@@ -558,16 +558,16 @@ reconstructed from commit messages and diffs, not first-hand records.
     and `plan.md` (Phase 6).
 - Files:
   - New: `internal/health-certs.go`, `internal/health-pods.go`,
-    `internal/health-sshd.go`, `internal/health-systemd.go`,
-    `internal/report-formats.go`, `internal/report-files_unix.go`,
-    `internal/report-files_windows.go`, `internal/scan-history.go`, and tests
-    `internal/health-certs_test.go`, `internal/health-pods_test.go`,
+    `../pkg`, `internal/health-systemd.go`,
+    `../pkg`, `../pkg`,
+    `internal/report-files_windows.go`, `../pkg`, and tests
+    `../pkg`, `internal/health-pods_test.go`,
     `internal/health-sshd_test.go`, `internal/health-sshd_posix_test.go`,
-    `internal/health-systemd_test.go`, `internal/report-formats_test.go`,
+    `../pkg`, `internal/report-formats_test.go`,
     `internal/scan-history_test.go`.
-  - Changed: `internal/health.go`, `internal/health-resources_linux.go`,
+  - Changed: `../pkg`, `../pkg`,
     `internal/health-resources_other.go`, `internal/health-thresholds.go`,
-    `internal/logic-cli.go`, `internal/report.go`, `internal/scan-store.go`,
+    `internal/logic-cli.go`, `../pkg`, `internal/scan-store.go`,
     `internal/database.go`, `internal/seed.go`, their tests,
     `main_test.go`, `README.md`, `CONTRIBUTING.md`, and `intel/*.md` except
     `golang.md`.
@@ -625,17 +625,17 @@ reconstructed from commit messages and diffs, not first-hand records.
     Windows, check table, upgrade notes), `maint.md` (sections 3, 4, 5),
     `map.md`, `notes.md`, `cybersec.md`, and `plan.md` (P3-7, sequence).
 - Files:
-  - New: `internal/health-resources.go`, `internal/health-disk_unix.go`,
+  - New: `internal/health-resources.go`, `../pkg`,
     `internal/health-resources_darwin.go`,
     `internal/health-resources_windows.go`, `internal/health-decode.go`, and
-    tests `internal/health-resources_test.go`,
-    `internal/health-thresholds_test.go`, `internal/health-decode_test.go`,
+    tests `../pkg`,
+    `../pkg`, `../pkg`,
     `internal/health-resources_darwin_test.go`,
     `internal/health-resources_windows_test.go`.
   - Changed: `internal/health-resources_linux.go`,
     `internal/health-resources_linux_test.go`,
-    `internal/health-resources_other.go`, `internal/health-thresholds.go`,
-    `internal/logic-cli_test.go`, `README.md`, and `intel/` documents.
+    `internal/health-resources_other.go`, `../pkg`,
+    `../pkg`, `README.md`, and `intel/` documents.
 - Reason / reference: `plan.md` P3-7 (Q-005), chosen by the maintainer on
   2026-10-04 as the next item after M6.
   - Validated on Linux (tests, race, non-root run, coverage) and by vet,
@@ -661,10 +661,10 @@ reconstructed from commit messages and diffs, not first-hand records.
     that `cpu-load`'s value is a busy percentage on Windows), the `map.md`
     diagram, the `maint.md` build-constraint exception for
     `health-decode.go`, and the `Filetime.Nanoseconds` wording.
-- Files: `internal/health-decode.go`, `internal/health-decode_test.go`,
+- Files: `../pkg`, `internal/health-decode_test.go`,
   `internal/health-resources_darwin.go`,
-  `internal/health-resources_darwin_test.go`,
-  `internal/health-resources_windows.go`,
+  `../pkg`,
+  `../pkg`,
   `internal/health-resources_windows_test.go`, `README.md`,
   `intel/maint.md`, `intel/map.md`, `intel/notes.md`, `intel/plan.md`,
   `intel/history.md`
@@ -814,8 +814,8 @@ reconstructed from commit messages and diffs, not first-hand records.
     `internal/health-exec_other.go`, and tests
     `internal/health-exec_test.go`, `internal/health-exec_unix_test.go`,
     `internal/logic-cli_unix_test.go`.
-  - Changed: `main.go`, `main_test.go`, `internal/database.go`,
-    `internal/seed.go`, `internal/health.go`, `internal/health-systemd.go`,
+  - Changed: `main.go`, `main_test.go`, `../pkg`,
+    `../pkg`, `../pkg`, `internal/health-systemd.go`,
     `internal/health-pods.go`, `internal/health-resources_linux.go`,
     `internal/logic-cli.go`, their tests (`database_test.go`,
     `checks_test.go`, `health_test.go`, `health-pods_test.go`,
