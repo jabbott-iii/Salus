@@ -833,3 +833,40 @@ reconstructed from commit messages and diffs, not first-hand records.
     are fixed (see `plan.md`).
   - Uncommitted at the time of writing.
 
+## 2026-10-04: P8-1 — container image on GitHub Container Registry (uncommitted)
+
+- Change:
+  - `cd.yml` builds the `Dockerfile` image natively for linux/amd64 and
+    linux/arm64 on every CD run and smoke tests it (platform, `--version`,
+    UID 10001, volume persistence). On tag runs, after the GitHub Release, a
+    new `image-publish` job pushes it to `ghcr.io/jabbott-iii/salus` with the
+    tags `X.Y.Z`, `X.Y.Z-amd64`, `X.Y.Z-arm64`, and, for stable releases,
+    `X.Y` and `latest`, and attests the multi-arch image's build provenance
+    (pushed to the registry as well).
+  - The GitHub Release step marks tags with a pre-release suffix as
+    pre-releases.
+  - `Dockerfile`: `ARG VERSION` (default `dev`) feeds `-X main.version`; OCI
+    labels link the package to the repository.
+  - Documentation: README ("Containerization", "Verifying build
+    provenance"), `SECURITY.md`, `maint.md` section 7, `map.md`,
+    `cybersec.md` (controls), and `plan.md` (Phase 8, sequence step 10).
+- Files: `.github/workflows/cd.yml`, `Dockerfile`, `README.md`,
+  `SECURITY.md`, `intel/maint.md`, `intel/map.md`, `intel/cybersec.md`,
+  `intel/plan.md`, `intel/history.md`
+- Reason / reference: maintainer request on 2026-10-04 to add a package
+  release for GitHub to CD (`plan.md` P8-1).
+  - The new job follows the SEC-006 rule for jobs with `id-token: write`:
+    first-party actions only. No new third-party action or pin was added.
+  - An independent review led to: creating pre-releases as drafts and
+    publishing them afterwards (the release action otherwise publishes before
+    uploading, which immutable releases reject), making `release` wait for
+    the image jobs, validating the tag format before anything is published,
+    and dropping index annotations that a Docker manifest list cannot carry.
+  - Validated with actionlint, shellcheck, and hadolint, and by running the
+    tag-derivation script locally. The workflow itself has not run yet;
+    `plan.md` P8-1 lists the runs that validate it.
+  - `.github/workflows/cd.yml` was delivered as a patch
+    (`salus-p8-cd.patch`, checked to apply cleanly to `7060887`), because the
+    remote session cannot write `.github/`.
+  - Uncommitted at the time of writing.
+

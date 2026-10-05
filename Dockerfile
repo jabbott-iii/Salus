@@ -15,11 +15,20 @@ RUN go mod download
 # Copy source and build (.dockerignore keeps local state out of the context)
 COPY . .
 # TARGETOS/TARGETARCH are set by BuildKit; empty values fall back to the host.
+# VERSION is what salus --version reports; CD passes the release tag.
 ARG TARGETOS
 ARG TARGETARCH
-RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /out/salus .
+ARG VERSION=dev
+RUN CGO_ENABLED=1 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -ldflags "-X main.version=${VERSION}" -o /out/salus .
 
 FROM alpine:3.24@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
+
+# OCI labels. The source label links a package in GitHub Container Registry
+# to the repository. CD adds org.opencontainers.image.version and .revision.
+LABEL org.opencontainers.image.title="salus" \
+      org.opencontainers.image.description="Salus environment health checker: disk, memory, CPU, Docker, Kubernetes, services, time sync, certificates, and misconfigurations, reported as PASS/WARN/FAIL." \
+      org.opencontainers.image.source="https://github.com/jabbott-iii/Salus" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
 # No extra packages are needed at runtime: go-sqlite3 compiles SQLite into the
 # binary, and Salus makes no TLS connections. Salus runs as an unprivileged

@@ -202,6 +202,16 @@ archives from manual CD runs, which are built from a branch rather than a
 release tag. The 1.0.0 and 1.0.1 archives have no build provenance
 attestation.
 
+Container images published since 1.1.0 (see [Containerization](#containerization))
+carry the same kind of attestation. Verify an image by its version tag
+(`X.Y.Z`, without the `v`):
+
+```bash
+gh attestation verify oci://ghcr.io/jabbott-iii/salus:X.Y.Z --repo jabbott-iii/Salus \
+  --signer-workflow jabbott-iii/Salus/.github/workflows/cd.yml \
+  --source-ref refs/tags/vX.Y.Z
+```
+
 ### Building from source
 
 ```bash
@@ -686,17 +696,39 @@ Other changes:
 
 ## Containerization
 
-The repository includes a multi-stage `Dockerfile`. Build the image:
+Each release since 1.1.0 publishes a container image for `linux/amd64` and
+`linux/arm64` to the GitHub Container Registry. Pull it by version (without
+the `v` of the release tag):
+```bash
+docker pull ghcr.io/jabbott-iii/salus:X.Y.Z
+```
+
+| Tag | Points to |
+|---|---|
+| `X.Y.Z` | That release |
+| `X.Y` | The newest stable release of that minor version |
+| `latest` | The most recently published stable release |
+| `X.Y.Z-amd64`, `X.Y.Z-arm64` | One architecture of that release |
+
+Pre-releases (tags such as `v1.2.0-rc.1`) get only their own version tag,
+such as `1.2.0-rc.1`. In the image, `salus --version` reports the release tag,
+for example `salus version v1.1.0`. To check that an image was built by this
+repository's release workflow, see
+[Verifying build provenance](#verifying-build-provenance-optional).
+
+To build the image yourself from the multi-stage `Dockerfile` instead:
 ```bash
 docker build -t salus .
 ```
+A local build reports `salus version dev` unless you pass
+`--build-arg VERSION=<version>`.
 
-Run a health check:
+Run a health check (with a local build, use `salus` as the image name):
 ```bash
 docker run -it --rm \
   -v salus-data:/app/data \
   -e SALUS_DB_PATH=/app/data/salus.db \
-  salus check run
+  ghcr.io/jabbott-iii/salus:X.Y.Z check run
 ```
 
 Note:

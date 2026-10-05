@@ -570,6 +570,30 @@ authorization plus README and `history.md` updates:
   `salus_<os>_<arch>.tar.gz` (Linux, macOS) and `salus_<os>_<arch>.zip`
   (Windows), plus `checksums.txt` (Q-003). The README install section must
   match it, including the `gh attestation verify` command.
+- `cd.yml` also builds the container image (P8-1). The `image` matrix builds
+  the `Dockerfile` natively on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm`
+  (arm64) with `--build-arg VERSION=<tag>`, smoke tests it like `docker.yml`
+  (platform, `--version`, UID 10001, volume persistence), and hands it on as
+  a `docker save` artifact. On tag runs only, `image-publish` (after
+  `release`) pushes `ghcr.io/<owner>/salus:<X.Y.Z>-<arch>`, combines them with
+  `docker buildx imagetools create` into `<X.Y.Z>`, plus `<X.Y>` and `latest`
+  for tags without a pre-release suffix, and attests the multi-arch digest
+  with `push-to-registry`. Image tags drop the `v`. The `image` job rejects a
+  tag that is not `vMAJOR.MINOR.PATCH[-PRERELEASE]` (build metadata such as
+  `+meta`, which the Makefile accepts, is not a valid image tag), and
+  `release` needs `image`, so such a tag, or an image that fails its smoke
+  test, never gets an immutable release. The README "Containerization" tag
+  table and image `gh attestation verify` command must match.
+  - The runners' Docker (28.x) uses the classic image store, so pushed images
+    have Docker media types and the multi-arch tag is a Docker manifest list.
+    It cannot carry OCI annotations, so GHCR shows no package description;
+    the OCI labels inside each image are the metadata. Pushing OCI media
+    types (for example with `skopeo copy --format oci`) would allow index
+    annotations; not done.
+  - A tag with a `-` suffix makes a pre-release. `softprops/action-gh-release`
+    v3 publishes a pre-release before uploading its assets, which immutable
+    releases reject, so CD creates it as a draft (`draft: true`) and the
+    `Publish pre-release` step publishes it with `gh api` after the upload.
 - CD job permissions (SEC-006):
   - The `package` job packages, checksums, and attests the archives with
     `id-token: write` and `attestations: write`. Only first-party actions
@@ -578,11 +602,17 @@ authorization plus README and `history.md` updates:
     could forge provenance.
   - The `release` job has `contents: write` and runs the third-party
     `softprops/action-gh-release`, so that action cannot sign provenance.
+  - The `image-publish` job has `packages: write`, `id-token: write`, and
+    `attestations: write`. The same first-party-only rule applies: registry
+    login, push, and the multi-arch index use the `docker` CLI with the job's
+    `GITHUB_TOKEN`, never a third-party action. It logs out of `ghcr.io` in an
+    `always()` step.
   - No other CD job has write permissions. Outside CD, only the `codeql` job in
     `security.yml` can write (`security-events: write`, for SARIF upload).
   - `artifact-metadata: write` is deliberately absent. `actions/attest`
     creates storage records only with `push-to-registry`, and only for
-    organization-owned repositories (checked in the v4.2.2 source).
+    organization-owned repositories (checked in the v4.2.2 source), so
+    `image-publish` sets `create-storage-record: false`.
 - **Runner labels (Q-011):**
   - CD builds Linux on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64),
     and runs the release job on `ubuntu-24.04`, so release builds do not move
@@ -617,8 +647,12 @@ authorization plus README and `history.md` updates:
 - `security.yml` also runs `govulncheck`, which fails on vulnerabilities
   reachable from Salus code (SEC-005). Unlike gosec, it is blocking.
 - Container image (`Dockerfile`):
-  - Both stages are pinned by digest on the same Alpine release, so the binary
-    runs against the musl it was linked with. Bump the builder and runtime
+  - Both stages are pinned by index digest on the same Alpine release, so the
+    binary runs against the musl it was linked with, and both CD
+    architectures resolve their own platform image.
+  - `ARG VERSION` (default `dev`) sets `-X main.version`. The runtime stage's
+    OCI labels (`source`, `description`, `licenses`, `title`) link the GHCR
+    package to the repository; CD adds `version` and `revision` labels. Bump the builder and runtime
     tags together. Dependabot only automates digest and patch updates, grouped
     into one PR.
   - The runtime stage installs no packages: go-sqlite3 compiles SQLite into

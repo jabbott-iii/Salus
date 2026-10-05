@@ -33,7 +33,8 @@ Include as much of the following as you can:
 
 - The Salus version (`salus --version`), the operating system and CPU
   architecture, and how you installed Salus: a release archive, a build from
-  source, or the container image built from the `Dockerfile`.
+  source, the container image from `ghcr.io/jabbott-iii/salus`, or an image
+  built from the `Dockerfile`.
 - The command, flags, and environment variables involved (for example
   `SALUS_DB_PATH` or `SALUS_SSHD_CONFIG`).
 - Steps to reproduce, or a proof of concept.
@@ -77,7 +78,8 @@ In scope:
     `--cert` file or credentials in `DOCKER_HOST`;
   - SQL injection, or unsafe creation or permissions of the database file or
     an `--output` report file.
-- The `Dockerfile` and the image built from it.
+- The `Dockerfile` and the image built from it, including the images
+  published to `ghcr.io/jabbott-iii/salus`.
 - The release pipeline: the GitHub Actions workflows, release archives,
   `checksums.txt`, and build provenance attestations.
 - Vulnerabilities in a dependency or in the Go toolchain that Salus code can
@@ -101,7 +103,8 @@ Out of scope:
 ## Verifying releases
 
 Every release publishes `checksums.txt`, and releases after 1.0.1 include a
-signed build provenance attestation for each archive. See
+signed build provenance attestation for each archive. Container images on
+`ghcr.io/jabbott-iii/salus` (since 1.1.0) carry one too. See
 [Release archives](README.md#release-archives) and
 [Verifying build provenance](README.md#verifying-build-provenance-optional)
 in the README for the commands.

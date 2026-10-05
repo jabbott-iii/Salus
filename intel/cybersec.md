@@ -145,7 +145,11 @@ locally as P7-3, uncommitted, waiting for CI on macOS and Windows.
   julianday(?)`). No SQL is built from input.
 - Workflows declare `permissions: contents: read` at the top level. Only the
   CD `release` job requests `contents: write`, and `security.yml` requests
-  `security-events: write` for SARIF upload.
+  `security-events: write` for SARIF upload. Since P8-1, the CD
+  `image-publish` job requests `packages: write` (with `id-token: write` and
+  `attestations: write` for the image attestation); it runs on tags only,
+  after the release, uses only first-party actions and the `docker` CLI, and
+  logs out of `ghcr.io` when it ends.
 - All third-party actions are pinned by commit SHA. The windows/arm64
   llvm-mingw download is verified against a pinned SHA-256.
 - CI uses `pull_request`, not `pull_request_target`.

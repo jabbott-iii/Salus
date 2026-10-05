@@ -92,10 +92,14 @@ Salus/
 │   ├── security.yml            CodeQL + gosec (SARIF, non-blocking) + govulncheck (blocking)
 │   ├── docker.yml              Image build + smoke tests (non-root, volume, in-container WARNs)
 │   └── cd.yml                  Tag/manual 6-target CGO build → package job: .tar.gz/.zip + checksums
-│                               + provenance attestation → release job: GitHub Release (tags only);
-│                               Linux builds and both release jobs pinned to Ubuntu 24.04
+│                               + provenance attestation → release job: GitHub Release (tags only;
+│                               pre-release for -suffix tags); image matrix: native amd64/arm64
+│                               Docker builds + smoke tests → image-publish (tags only): ghcr.io
+│                               push, multi-arch tags, provenance attestation (P8-1);
+│                               Linux builds and release jobs pinned to Ubuntu 24.04
 ├── .devcontainer/devcontainer.json   Ubuntu base + Go, Docker-outside-of-Docker, Neovim
-├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001
+├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001;
+│                               ARG VERSION, OCI labels (published to ghcr.io by cd.yml)
 ├── .dockerignore               Keeps .git, .env, *.db, IDE/CI files out of the build context
 ├── Makefile                    Dev targets (build, test, vet, lint, fmt, cover) + release tagging
 ├── .golangci.yml               golangci-lint v2 config: pinned linter set (P4-3), tests analyzed

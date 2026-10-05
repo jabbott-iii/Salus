@@ -303,6 +303,12 @@ Not run: golangci-lint (no compatible build available), gosec, CodeQL,
 govulncheck, the Docker image build, and the macOS and Windows tests. CI
 covers them after the push.
 
+## Phase 8: Distribution
+
+| ID | Work | Acceptance criteria | Status |
+|---|---|---|---|
+| P8-1 | Publish the container image to GitHub Packages (GitHub Container Registry) from CD, requested by the maintainer on 2026-10-04 ("a package release on CD for GitHub"; GitHub Packages hosts containers, not Go binaries or deb/rpm). `Dockerfile`: `ARG VERSION` for `-X main.version`, OCI labels. `cd.yml`: `image` matrix (tag-format check, native amd64 and arm64 builds, smoke tests, `docker save` artifacts) that `release` now waits for, and a tag-only `image-publish` job after `release` (per-arch push, `docker buildx imagetools create` for the multi-arch tags, `actions/attest` with `push-to-registry`); a `-suffix` tag makes a pre-release, created as a draft and then published, because the release action would otherwise publish it before uploading assets, which immutable releases reject. Defaults chosen in the implementation, open to change: image `ghcr.io/jabbott-iii/salus`; tags `X.Y.Z`, `X.Y`, `latest` (stable only), and `X.Y.Z-<arch>`; no image is pushed by manual runs; no new third-party action. | An independent review (verified against the softprops v3.0.3, actions/attest v4.2.2, and buildx v0.37.1 sources and the runner images) found the pre-release/immutable-release failure, dropped index annotations, the release not waiting for the image, and late tag validation; all fixed. actionlint 1.7.12 with shellcheck 0.11 passes; hadolint reports only the existing DL3018 (unpinned `apk add build-base` in the builder stage); the tag-derivation script was run against stable, pre-release, and invalid tags. Not yet run on GitHub: a manual CD run (both image builds and smoke tests), then a pre-release tag such as `v1.1.0-rc.1` (push, multi-arch index, attestation, and `gh attestation verify oci://...`), before the v1.1.0 tag. Before it, check that no `salus` container package already exists under the account unlinked from this repository (`GITHUB_TOKEN` cannot push to it). After the first publish, set the package's visibility to public in its settings (new packages are private; until then, pulling and `gh attestation verify oci://...` need `docker login ghcr.io`). | Awaiting merge |
+
 ## Recommended sequence
 
 1. **M1, green pipeline:** Done. CI, Docker, and Security are green on
@@ -398,3 +404,11 @@ covers them after the push.
    behavior (see the README "Upgrading from 1.0.2" section), so it belongs in
    v1.1.0 together with M5, M6, and P3-7; tag after it, before 2026-10-19 if
    possible (step 7).
+10. **P8-1, container image on GitHub Packages:** implemented 2026-10-04
+    (uncommitted). Before tagging v1.1.0: commit and push, run CD manually
+    on `main` (both image jobs must pass), push a pre-release tag such as
+    `v1.1.0-rc.1` to exercise the publish job end to end, make the
+    `salus` package public in its settings, and check
+    `gh attestation verify oci://ghcr.io/jabbott-iii/salus:1.1.0-rc.1`
+    (README "Verifying build provenance"). Then tag v1.1.0.
+
