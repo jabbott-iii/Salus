@@ -18,9 +18,12 @@ package internal
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -416,7 +419,7 @@ func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
 				"--mem-warn", "60", "--mem-fail", "95",
 				"--load-warn", "150", "--load-fail", "300",
 				"--cert", "/etc/ssl/a.pem", "--cert-warn-days", "14",
-				"--timeout", "10s",
+				"--timeout", "10s", "--check-timeout", "45s", "--run-timeout", "5m",
 			},
 			want: CheckOptions{
 				DiskPaths: []string{"/data"}, ServiceNames: []string{"nginx"}, KubeContext: "prod", KubeNamespace: "web",
@@ -425,7 +428,7 @@ func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
 				MemWarnPercent: 60, MemFailPercent: 95,
 				LoadWarnPercent: 150, LoadFailPercent: 300,
 				CertPaths: []string{"/etc/ssl/a.pem"}, CertWarnDays: 14,
-				CommandTimeout: 10 * time.Second,
+				CommandTimeout: 10 * time.Second, CheckTimeout: 45 * time.Second, RunTimeout: 5 * time.Minute,
 			},
 		},
 		{
@@ -465,7 +468,7 @@ func TestCheckRunPassesFlagValuesToChecks(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var got CheckOptions
-			runChecks := func(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
+			runChecks := func(_ context.Context, keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 				got = opts
 				return []CheckOutcome{{Key: keyMisconfig, Status: StatusPass}}, nil
 			}
@@ -502,6 +505,10 @@ func TestCheckRunRejectsInvalidLimits(t *testing.T) {
 		{"infinite", []string{"--load-fail", "+Inf"}, "invalid --load-fail value +Inf: must be a finite number greater than 0"},
 		{"zero timeout", []string{"--timeout", "0s"}, "invalid --timeout value 0s: must be greater than 0"},
 		{"negative timeout", []string{"--timeout=-1s"}, "invalid --timeout value -1s: must be greater than 0"},
+		{"negative check timeout", []string{"--check-timeout=-1s"}, "invalid --check-timeout value -1s: must not be negative"},
+		{"check timeout below command timeout", []string{"--check-timeout", "2s"}, "--check-timeout (2s) must not be less than --timeout (3s)"},
+		{"check timeout below raised command timeout", []string{"--timeout", "1m", "--check-timeout", "30s"}, "--check-timeout (30s) must not be less than --timeout (1m0s)"},
+		{"negative run timeout", []string{"--run-timeout=-1m"}, "invalid --run-timeout value -1m0s: must not be negative"},
 		{"malformed value", []string{"--disk-warn", "high"}, `invalid argument "high" for "--disk-warn" flag`},
 		{"inode warn above fail", []string{"--inode-warn", "95"}, "--inode-warn (95) must be less than --inode-fail (90)"},
 		{"inode above 100", []string{"--inode-fail", "101"}, "invalid --inode-fail value 101: must be at most 100"},
@@ -519,7 +526,7 @@ func TestCheckRunRejectsInvalidLimits(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) {
+			runChecks := func(context.Context, []string, CheckOptions) ([]CheckOutcome, error) {
 				t.Error("checks ran despite an invalid flag value")
 				return nil, nil
 			}
@@ -802,7 +809,7 @@ func executeCheckRunWith(t *testing.T, db *Database, outcomes []CheckOutcome, ar
 	if db != nil {
 		opener = openerFor(db)
 	}
-	runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) { return outcomes, nil }
+	runChecks := func(context.Context, []string, CheckOptions) ([]CheckOutcome, error) { return outcomes, nil }
 	cmd := newCheckRunCmdWith(opener, runChecks)
 	var stdout, stderr bytes.Buffer
 	cmd.SetOut(&stdout)
@@ -932,7 +939,7 @@ func TestCheckRunRejectsUnusableOutputBeforeRunning(t *testing.T) {
 	}
 	for name, path := range paths {
 		t.Run(name, func(t *testing.T) {
-			runChecks := func([]string, CheckOptions) ([]CheckOutcome, error) {
+			runChecks := func(context.Context, []string, CheckOptions) ([]CheckOutcome, error) {
 				t.Error("checks ran despite an unusable --output")
 				return nil, nil
 			}
@@ -1018,5 +1025,76 @@ func TestJobsShowJSONIncludesTargetsAndValues(t *testing.T) {
 	if len(got.Results) != 2 || got.Results[0].Target != "/" || got.Results[0].Value == nil || *got.Results[0].Value != 95 ||
 		got.Results[0].Unit != unitPercent || got.Results[1].Value != nil {
 		t.Errorf("results = %+v, want the stored target, value, and unit", got.Results)
+	}
+}
+
+func TestCheckRunWritesReportWhenSaveFails(t *testing.T) {
+	// An unseeded database opens, but RecordScan cannot find the check's
+	// feature, standing in for a lock held past the busy timeout or a full
+	// disk. The finished report must still be written, and the run exits 3.
+	for _, toFile := range []bool{false, true} {
+		t.Run(fmt.Sprintf("output file %v", toFile), func(t *testing.T) {
+			db := newTestDatabase(t)
+			args := []string{}
+			output := filepath.Join(t.TempDir(), "report.txt")
+			if toFile {
+				args = append(args, "--output", output)
+			}
+
+			stdout, _, err := executeCheckRunWith(t, db, []CheckOutcome{passOutcome}, args...)
+			if got := ExitCode(err); got != ExitCodeError {
+				t.Fatalf("ExitCode(%v) = %d, want %d", err, got, ExitCodeError)
+			}
+			if !strings.Contains(err.Error(), "the report was written") {
+				t.Errorf("error = %q, want it to say the report was written", err)
+			}
+			report := stdout
+			if toFile {
+				data, readErr := os.ReadFile(output)
+				if readErr != nil {
+					t.Fatalf("read report: %v", readErr)
+				}
+				report = string(data)
+			}
+			if !strings.Contains(report, "[PASS] misconfig") {
+				t.Errorf("report = %q, want the check result", report)
+			}
+		})
+	}
+}
+
+func TestCheckRunInterruptedWritesAndSavesNothing(t *testing.T) {
+	db := newSeededTestDatabase(t)
+	output := filepath.Join(t.TempDir(), "report.txt")
+	ctx, cancel := context.WithCancelCause(t.Context())
+	defer cancel(nil)
+
+	runChecks := func(ctx context.Context, _ []string, _ CheckOptions) ([]CheckOutcome, error) {
+		// What RunChecks does when a signal cancels the run's context.
+		cancel(errors.New("terminated signal received"))
+		<-ctx.Done()
+		return nil, context.Cause(ctx)
+	}
+	cmd := newCheckRunCmdWith(openerFor(db), runChecks)
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.SetArgs([]string{"--output", output})
+	err := cmd.ExecuteContext(ctx)
+
+	if got := ExitCode(err); got != ExitCodeError {
+		t.Fatalf("ExitCode(%v) = %d, want %d", err, got, ExitCodeError)
+	}
+	if want := "interrupted (terminated signal received)"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v, want it to contain %q", err, want)
+	}
+	if _, statErr := os.Stat(output); !errors.Is(statErr, fs.ErrNotExist) {
+		t.Errorf("report file exists (stat error %v), want none", statErr)
+	}
+	jobs, err := ListScanJobs(db, 0)
+	if err != nil {
+		t.Fatalf("ListScanJobs() error = %v", err)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("%d runs saved, want none", len(jobs))
 	}
 }

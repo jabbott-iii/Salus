@@ -7,7 +7,8 @@ corrected. Go language rules live in [`golang.md`](golang.md), which
 `AGENTS.md` designates as the authoritative guidance on Go language usage. They
 apply to all Go work in this repository.
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7).
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7; P7
+run hardening added uncommitted on top of `b16129f`).
 
 ## 1. Purpose and scope
 
@@ -27,9 +28,9 @@ HTTP interface is ever added.
 
 | Layer | Files | Responsibility |
 |---|---|---|
-| Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `main()` only calls `os.Exit(run(...))`. |
-| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`) and flag parsing. `check run` validates every flag (`validateLimits`, `parseFailOn`, the format, `--retain`, and the `cert-expiry` target rule) before opening the database, applies `--fail-on` (`exitCodeWithFailOn`), prunes for `--retain`, routes the report to stdout or `--output`, and returns `*ExitStatusError` for a non-zero result. `jobs prune`, `jobs stats --since`, and `check run --retain` parse ages with `parseAge`. |
-| Checks | `internal/health.go`, `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go`, `internal/health-systemd.go`, `internal/health-pods.go`, `internal/health-certs.go`, `internal/health-sshd.go` | Check registry and per-target expansion (`checkTargets`), thresholds, and the individual check functions. |
+| Entry point | `main.go`, `version.go` | `run()` builds the root command with the build `version` (`--version`) and a lazy, memoized database opener (`internal.DatabasePath` + `internal.OpenDatabase`, closed on return), executes it, and maps the result to an exit code. `run` delegates to `runWith`, which takes the command constructor (a test seam) and recovers a panic as an internal error (exit 3, P7-6). `main()` only calls `os.Exit(run(...))`. |
+| CLI | `internal/logic-cli.go` | Cobra command tree (`check list`, `check run`, `jobs list`, `jobs show`, `jobs prune`, `jobs diff`, `jobs stats`) and flag parsing. `check run` validates every flag (`validateLimits`, `parseFailOn`, the format, `--retain`, and the `cert-expiry` target rule) before opening the database, runs the checks under a context that SIGINT and SIGTERM cancel (`stopSignalContext`), applies `--fail-on` (`exitCodeWithFailOn`), routes the report to stdout or `--output`, then saves the run and prunes for `--retain`, and returns `*ExitStatusError` for a non-zero result. `jobs prune`, `jobs stats --since`, and `check run --retain` parse ages with `parseAge`. |
+| Checks | `internal/health.go`, `internal/health-exec.go` (with `_unix.go`/`_other.go`), `internal/health-thresholds.go`, `internal/health-resources_linux.go`, `internal/health-resources_other.go`, `internal/health-systemd.go`, `internal/health-pods.go`, `internal/health-certs.go`, `internal/health-sshd.go` | Check registry and per-target expansion (`checkTargets`), per-check and per-run time limits (`runCheck`), external command execution (`opts.command`, `runExternal`), thresholds, and the individual check functions. |
 | Reporting | `internal/report.go`, `internal/report-formats.go` | Text and JSON rendering (check outcomes, and jobs for `jobs list/show --json`), Nagios, Prometheus, and JUnit rendering (`writeReport`), atomic `--output` files (`writeFileAtomic`), worst-status aggregation, exit-code constants, `ExitStatusError`, and `ExitCode`. |
 | Persistence | `internal/database.go`, `internal/database-path.go`, `internal/scan-store.go`, `internal/scan-history.go`, `internal/seed.go` | Database path resolution (`SALUS_DB_PATH` or per-user default), owner-only file creation, GORM models, schema migration, feature catalog seeding, scan job/result storage, queries, pruning, run comparison (`diffResults`), and statistics (`ScanStats`). |
 
@@ -43,20 +44,26 @@ check reads. `DatabasePathEnv` and `DefaultDatabasePath` are defined once in
 
 ### Runtime flow
 
-1. `main` opens (or creates) the SQLite file and runs `AutoMigrate`.
-2. `EnsureDefaultFeatures` idempotently seeds `FeatureCategory` and `Feature`
-   rows from the compiled-in catalog in `seed.go`.
+1. `main` opens (or creates) the SQLite file. `prepareDatabase` reads
+   `PRAGMA user_version`; a database at `schemaVersion` with the full catalog
+   is only read. Otherwise `AutoMigrate`, seeding (`seedCatalog`), and the
+   version update run in one immediate transaction (see Persistence).
+2. Seeding inserts missing `FeatureCategory` and `Feature` rows from the
+   compiled-in catalog in `seed.go`; it never updates existing rows.
 3. `check run` calls `RunChecks`, which executes checks sequentially in
    `AllCheckKeys` order (or the `--only` order). A check listed in
    `checkTargets` runs once per target (mount path, service, or certificate
-   file), in target order.
-4. Unless `--no-save` is set, `RecordScan` persists one `ScanJob` and one
-   `ScanResult` per outcome in a single transaction. With `--retain`,
-   `PruneScanJobs` then removes older runs (never the one just recorded).
-5. The report is rendered in the `--format` (text by default) to stdout, to
-   the `--output` file, or nowhere with `--quiet`. A non-zero result after
-   `--fail-on` is returned as `*ExitStatusError`. `main.run` closes the
-   database and returns the exit code (0/1/2, or 3 for operational errors).
+   file), in target order. Each check runs in its own goroutine under
+   `--check-timeout` and the optional `--run-timeout` (P7-4).
+4. The report is rendered in the `--format` (text by default) to stdout, to
+   the `--output` file, or nowhere with `--quiet`.
+5. Unless `--no-save` is set, `RecordScan` then persists one `ScanJob` and
+   one `ScanResult` per outcome in a single transaction. With `--retain`,
+   `PruneScanJobs` then removes older runs (never the one just recorded). A
+   failure of either exits 3 with the report already written (P7-2).
+6. A non-zero result after `--fail-on` is returned as `*ExitStatusError`.
+   `main.run` closes the database and returns the exit code (0/1/2, or 3 for
+   operational errors).
 
 ## 3. Public contracts (treat as compatibility surface)
 
@@ -71,11 +78,16 @@ authorization plus README and `history.md` updates:
   `--mem-warn`/`--mem-fail` (80/90), and `--load-warn`/`--load-fail` (80/100,
   per-CPU load in percent) are percentages. `--cert-warn-days` (default 30) is
   a positive whole number. `--timeout` (default 3s) bounds each external
-  command. The defaults are the `default*` constants in `health.go`.
+  command, including processes it started (on Unix, its process group is
+  killed; P7-3). `--check-timeout` (default `defaultCheckTimeoutFactor` = 10
+  times `--timeout`) bounds each check and target, and `--run-timeout`
+  (default none) the whole run; `0` means the default for both (P7-4). The
+  defaults are the `default*` constants in `health.go`.
   `validateLimits` rejects NaN, infinite, zero, or negative thresholds, disk,
   inode, and memory values above 100, a WARN value that is not below its FAIL
-  value, a timeout that is not positive, and non-positive certificate days.
-  It runs before the database opens or any check runs.
+  value, a timeout that is not positive, a negative `--check-timeout` or
+  `--run-timeout`, a `--check-timeout` below `--timeout`, and non-positive
+  certificate days. It runs before the database opens or any check runs.
 - **`check run` targets (M6):** `--disk-path` (string array, default `/`;
   commas belong to the path), `--service` (string slice: repeat or
   comma-separate), and `--cert` (string array) make their checks run once per
@@ -122,7 +134,10 @@ authorization plus README and `history.md` updates:
   (`exitCodeWithFailOn`). Every command exits `3` (`ExitCodeError`) for
   operational errors: Cobra flag/argument errors, invalid flag values,
   unknown `--only` keys, missing jobs, too few runs for `jobs diff`, an
-  unwritable `--output`, and database failures (Q-004). `jobs diff
+  unwritable `--output`, and database failures (Q-004). `check run` also
+  exits `3` when saving the run fails after the report was written (Q-015),
+  when SIGINT or SIGTERM arrives while checks run (no report, nothing saved;
+  Q-018), and for a panic (`main.runWith`). `jobs diff
   --exit-code` exits `1` when anything changed. Commands return
   `*ExitStatusError` for these non-zero results, and `main.run` maps any
   returned error with `ExitCode`. Only `main` calls `os.Exit`.
@@ -137,7 +152,11 @@ authorization plus README and `history.md` updates:
   and `duration_ns` (nanoseconds, from `time.Duration`), plus optional `target`
   (targeted checks), `value`, and `unit` (`percent`, `seconds`, `days`, or
   `count`; the `unit*` constants in `health.go`). Optional fields are omitted
-  when empty; `value` is a pointer so that `0` is still printed.
+  when empty; `value` is a pointer so that `0` is still printed. Stability
+  promise (Q-016, documented in the README): fields may be added, but are
+  never renamed or removed and never change type, and the output stays a bare
+  array. Metadata (versions, host, times) belongs in other formats; an
+  envelope would need a new format name or a major version.
 - **`--quiet`** suppresses `check run` report output, including `--json`, and
   still sets the exit code.
 - **Output streams:** stdout carries only command output (reports, JSON, help,
@@ -243,7 +262,14 @@ authorization plus README and `history.md` updates:
   `since` and `runs` at the top level; an empty window prints `"checks": []`.
 - **Database schema:** tables for `FeatureCategory`, `Feature`, `ScanJob`,
   `ScanResult` managed by GORM `AutoMigrate`. `ScanResult.Target` and `Unit`
-  (`NOT NULL DEFAULT ''`) and `Value` (nullable) were added in M6.
+  (`NOT NULL DEFAULT ''`) and `Value` (nullable) were added in M6. The schema
+  version is stored in `PRAGMA user_version` (`schemaVersion`, 1 since P7-1;
+  databases from before have 0).
+- **Signals:** SIGINT and SIGTERM during `check run` stop the checks and the
+  tools they started and exit 3 without a report or a saved run; a second
+  signal ends the process (default handling is restored). A signal inherited
+  as ignored stays ignored. Once the checks have finished, the report and the
+  save complete (Q-018).
 
 ## 4. Conventions
 
@@ -269,9 +295,23 @@ authorization plus README and `history.md` updates:
   so they remain testable.
 
 ### Checks
-- A check is a `checkFunc` (`func(CheckOptions) CheckOutcome`) and must never
-  panic or return an error; failures are expressed as `StatusWarn` or
-  `StatusFail` with a human-readable `Message`.
+- A check is a `checkFunc` (`func(context.Context, CheckOptions) CheckOutcome`)
+  and must never panic or return an error; failures are expressed as
+  `StatusWarn` or `StatusFail` with a human-readable `Message`. A check that
+  runs no external tool keeps the signature `func(CheckOptions) CheckOutcome`
+  and is registered through `withoutContext`. Checks that run tools pass
+  their `ctx` to `opts.command`. If a check panics anyway, `runCheck`
+  re-raises the panic on the caller's goroutine, and `main.runWith` turns it
+  into exit 3.
+- `RunChecks` runs each check in its own goroutine (`runCheck`) with a
+  deadline (`checkTimeout()`, cause `errCheckTimeout`) derived from the run's
+  context (cause `errRunTimeout` for `--run-timeout`, or the signal). A check
+  past its deadline becomes a FAIL `stoppedOutcome` naming the target; the
+  goroutine is abandoned after waiting `commandWaitDelay` + 100ms for its
+  tools to be killed, because Go cannot interrupt a blocked system call. Any
+  other cancellation makes `RunChecks` return the cause instead of outcomes.
+  Checks therefore must not write shared state, and the result channel is
+  buffered so an abandoned check can still finish.
 - Use `StatusWarn` when a check cannot run on this host (tool missing,
   unsupported OS) and `StatusFail` when the thing being checked is unhealthy
   or unreachable.
@@ -283,10 +323,20 @@ authorization plus README and `history.md` updates:
   still name the target, because text output prints only the key.
 - When a status is decided from one number, attach it with `withValue` and a
   `unit*` constant. Outcomes that measure nothing carry no value.
-- External tools are run only through `opts.hasTool` and `opts.command`,
-  which wrap `exec.LookPath` and `exec.CommandContext` with
-  `opts.commandTimeout()` (default 3s). Arguments are passed separately with
-  no shell. Tests replace them through the unexported `lookPath` and
+- External tools are run only through `opts.hasTool` and
+  `opts.command(ctx, ...)`, which wrap `exec.LookPath` and `runExternal`
+  (`health-exec.go`) with `opts.commandTimeout()` (default 3s). `runExternal`
+  sets `WaitDelay` (`commandWaitDelay`, 1s) so processes the tool started
+  cannot hold its pipes open; on Unix it starts the tool in a new process
+  group and kills the group on cancellation (`health-exec_unix.go`; other
+  platforms kill only the tool). It keeps at most `maxCommandOutput` (8 MiB)
+  of combined output and fails the command beyond that, treats
+  `exec.ErrWaitDelay` after a successful exit as success, and, when a tool
+  died from SIGINT or SIGTERM, waits up to `stopSignalGrace` for the run to
+  be cancelled by the same signal. On a timeout `opts.command` returns no
+  output and the error `<tool> timed out after <d>` (or `<tool> stopped:
+  <cause>` when the check or run ended first). Arguments are passed
+  separately with no shell. Tests replace them through the unexported `lookPath` and
   `runCommand` fields of `CheckOptions` (see `fakeToolOptions` in
   `internal/checks_test.go`). Validate any user-supplied argument before
   passing it, and end option parsing with `--` before it where the tool
@@ -315,7 +365,9 @@ authorization plus README and `history.md` updates:
 - Platform-specific logic uses `_linux.go`, `_darwin.go`, `_windows.go`, and
   `_other.go` files with matching build constraints (`_other.go` is
   `!linux && !darwin && !windows`), and every platform must define every
-  function the registry references. Classification shared by the
+  function the registry references. The exception is `health-exec_unix.go`
+  and `health-exec_other.go`, which split on `unix` / `!unix`, because
+  process groups exist on every Unix. Classification shared by the
   implemented platforms (`diskSpaceOutcome`, `inodeOutcome`) is in
   `health-resources.go` (`linux || darwin || windows`). Pure decoding of
   platform data (sysctl structs, Windows CPU counters) is in
@@ -365,10 +417,30 @@ authorization plus README and `history.md` updates:
 - Schema changes go through the GORM model structs and `AutoMigrate`.
   `AutoMigrate` only adds; it does not drop or rename columns. Any destructive
   change needs an explicit migration plan recorded in `plan.md` first.
+- **Schema version (P7-1):** a database at `schemaVersion` (in
+  `database.go`, stored as `PRAGMA user_version`) is not migrated again, so
+  every model change must bump `schemaVersion`. `TestSchemaMatchesSchemaVersion`
+  compares the created tables and indexes with `wantSchema` and fails until
+  both are updated. A database with a higher version (after a downgrade) is
+  used as it is, which is safe only while changes stay additive.
+- **Opening (P7-1):** the connection string gets `_busy_timeout=5000` and
+  `_txlock=immediate` unless `SALUS_DB_PATH` sets them
+  (`withConnectionDefaults`). `prepareDatabase` only reads a current database
+  (version and `catalogComplete`). Otherwise it runs `AutoMigrate`,
+  `seedCatalog`, and the version update in one transaction, which
+  `_txlock=immediate` starts under the write lock, so concurrent first opens
+  take turns (before P7-1 they could fail with "table already exists" or
+  "UNIQUE constraint failed"). If the transaction fails, for example on a
+  read-only database whose version was never recorded, the same work is
+  repeated without it; that only reads when nothing is missing. Seeding uses
+  `firstOrInsert`: a lookup, then `INSERT ... ON CONFLICT DO NOTHING`, then a
+  re-read, so it writes nothing when the row exists and tolerates a
+  concurrent insert.
 - Multi-row writes belong in a single `Transaction`. Queries inside a
   transaction must use the transaction handle (`tx`), not `db.Conn()`.
-- `RecordScan` takes the time the checks started, so `ScanJob.StartedAt` and
-  `FinishedAt` bracket the actual run.
+- `RecordScan` takes the time the checks started, so `ScanJob.StartedAt` is
+  the run's start. `FinishedAt` is when the run is saved, which since P7-2
+  follows writing the report.
 - GORM's logger is set to `logger.Silent` in `NewDatabase`. The default logger
   writes to stdout (corrupting `--json`) and logs normal "record not found"
   lookups. Database errors are returned and reported by the CLI.
@@ -397,7 +469,7 @@ authorization plus README and `history.md` updates:
   avoids SQLite's limit on bound variables. It compares times with
   `julianday`, because stored times keep the UTC offset they were written
   with, and the text sorts correctly only within one offset.
-- The seeded catalog is insert-only (`FirstOrCreate`), so changing a name or
+- The seeded catalog is insert-only (`firstOrInsert`), so changing a name or
   description in `seed.go` does not update existing databases. Updating rows
   on open would also break read-only databases, which must keep working.
 - Every `NewDatabase` must be paired with `Close`: `main.run` defers it, and
@@ -469,6 +541,12 @@ authorization plus README and `history.md` updates:
 - Certificate tests generate certificates in the test (`testCertDER`);
   sshd tests write configuration trees with `sshdFixture`. Report formats
   have golden-output tests in `report-formats_test.go`.
+- Time limits, cancellation, and panics are tested with checks added to the
+  registry for one test (`registerTestCheck` in `health-exec_test.go`, which
+  changes package state, so those tests must not call `t.Parallel`).
+  `runExternal` is tested with real `/bin/sh` processes on Unix only
+  (`health-exec_unix_test.go`), and signal handling by sending SIGTERM and
+  SIGINT to the test process (`logic-cli_unix_test.go`).
 - Commands are tested through `Execute()` with injected writers and
   arguments. `newCheckRunCmdWith` also takes the function that runs the
   checks, so tests can assert the `CheckOptions` built from flags without

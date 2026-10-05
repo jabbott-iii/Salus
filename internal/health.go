@@ -18,12 +18,15 @@ package internal
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -145,8 +148,15 @@ type CheckOptions struct {
 
 	CommandTimeout time.Duration
 
-	// Test seams for external tools; nil means exec.CommandContext(...).CombinedOutput
-	// and exec.LookPath. Tests set them so no real docker/kubectl/systemctl runs.
+	// CheckTimeout limits how long one check (one target of a targeted
+	// check) may run; zero means defaultCheckTimeoutFactor times the command
+	// timeout. RunTimeout limits the whole run; zero means no limit.
+	// RunChecks reports a check stopped by either limit as FAIL.
+	CheckTimeout time.Duration
+	RunTimeout   time.Duration
+
+	// Test seams for external tools; nil means runExternal and exec.LookPath.
+	// Tests set them so no real docker/kubectl/systemctl runs.
 	runCommand func(ctx context.Context, name string, args ...string) ([]byte, error)
 	lookPath   func(file string) (string, error)
 }
@@ -166,6 +176,12 @@ const (
 	defaultCertWarnDays     = 30
 	defaultCommandTimeout   = 3 * time.Second
 	defaultDiskPath         = "/"
+
+	// defaultCheckTimeoutFactor sets the default --check-timeout as a multiple
+	// of --timeout (30s with the default 3s), so a check has room for each of
+	// its external commands (docker-status runs up to three) and raising
+	// --timeout never makes checks time out sooner than their commands.
+	defaultCheckTimeoutFactor = 10
 )
 
 func (o CheckOptions) commandTimeout() time.Duration {
@@ -175,15 +191,38 @@ func (o CheckOptions) commandTimeout() time.Duration {
 	return o.CommandTimeout
 }
 
-// command runs an external tool with a timeout and returns its combined output.
-func (o CheckOptions) command(name string, args ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), o.commandTimeout())
+func (o CheckOptions) checkTimeout() time.Duration {
+	if o.CheckTimeout > 0 {
+		return o.CheckTimeout
+	}
+	if timeout := o.commandTimeout(); timeout <= math.MaxInt64/defaultCheckTimeoutFactor {
+		return defaultCheckTimeoutFactor * timeout
+	}
+	return math.MaxInt64 // the product would overflow; no limit in practice
+}
+
+// command runs an external tool with the command timeout and returns its
+// combined output. When the timeout ends the tool, the error says so and no
+// output is returned, so a partial line is never mistaken for the tool's
+// answer. ctx is the check's context: when the check's or the run's time
+// limit passes, or a signal stops the run, the tool is stopped too.
+func (o CheckOptions) command(ctx context.Context, name string, args ...string) ([]byte, error) {
+	timeout := o.commandTimeout()
+	cmdCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	run := runExternal
 	if o.runCommand != nil {
-		return o.runCommand(ctx, name, args...)
+		run = o.runCommand
 	}
-	return exec.CommandContext(ctx, name, args...).CombinedOutput()
+	out, err := run(cmdCtx, name, args...)
+	if err != nil && cmdCtx.Err() != nil {
+		if ctx.Err() != nil {
+			return nil, fmt.Errorf("%s stopped: %w", name, context.Cause(ctx))
+		}
+		return nil, fmt.Errorf("%s timed out after %s", name, timeout)
+	}
+	return out, err
 }
 
 // hasTool reports whether an executable is available on PATH.
@@ -240,21 +279,30 @@ func errorLine(output string, err error) string {
 	return firstLine(output, err)
 }
 
-type checkFunc func(CheckOptions) CheckOutcome
+// checkFunc runs one check. ctx ends when the check's or the run's time
+// limit passes, or when a signal stops the run; checks pass it to
+// opts.command so their external tools stop too.
+type checkFunc func(ctx context.Context, opts CheckOptions) CheckOutcome
 
 var checkRegistry = map[string]checkFunc{
-	keyDiskSpace:     checkDiskSpace,
-	keyMemory:        checkMemory,
-	keyCPULoad:       checkCPULoad,
+	keyDiskSpace:     withoutContext(checkDiskSpace),
+	keyMemory:        withoutContext(checkMemory),
+	keyCPULoad:       withoutContext(checkCPULoad),
 	keyDocker:        checkDockerStatus,
 	keyKubernetes:    checkKubernetesStatus,
 	keyServiceUptime: checkServiceUptime,
-	keyMisconfig:     checkMisconfiguration,
-	keyDiskInodes:    checkDiskInodes,
+	keyMisconfig:     withoutContext(checkMisconfiguration),
+	keyDiskInodes:    withoutContext(checkDiskInodes),
 	keyKubePods:      checkKubernetesPods,
 	keySystemdFailed: checkSystemdFailed,
 	keyTimeSync:      checkTimeSync,
-	keyCertExpiry:    checkCertExpiry,
+	keyCertExpiry:    withoutContext(checkCertExpiry),
+}
+
+// withoutContext adapts a check that runs no external tool, and so has
+// nothing to stop, to checkFunc. RunChecks still enforces its time limit.
+func withoutContext(check func(CheckOptions) CheckOutcome) checkFunc {
+	return func(_ context.Context, opts CheckOptions) CheckOutcome { return check(opts) }
 }
 
 // checkTarget makes a check run once per target. targets lists them in run
@@ -324,11 +372,22 @@ func ValidateCheckKeys(keys []string) error {
 	return nil
 }
 
+// Causes recorded when a time limit cancels a check's context.
+var (
+	errCheckTimeout = errors.New("check time limit reached")
+	errRunTimeout   = errors.New("run time limit reached")
+)
+
 // RunChecks executes the given check keys (or all built-in checks when keys is empty)
 // and returns their outcomes in the order requested. A targeted check (see
 // checkTargets) yields one outcome per target, in target order, with Target
 // set.
-func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
+//
+// A check that exceeds opts.CheckTimeout, and every check that the run's
+// opts.RunTimeout stops or prevents from starting, is reported as FAIL. When
+// ctx is cancelled for any other reason, such as a signal, RunChecks stops
+// and returns the cancellation cause instead of outcomes.
+func RunChecks(ctx context.Context, keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 	if len(keys) == 0 {
 		keys = AllCheckKeys
 	}
@@ -344,26 +403,119 @@ func RunChecks(keys []string, opts CheckOptions) ([]CheckOutcome, error) {
 		return duplicate
 	})
 
+	if opts.RunTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeoutCause(ctx, opts.RunTimeout, errRunTimeout)
+		defer cancel()
+	}
+
 	outcomes := make([]CheckOutcome, 0, len(keys))
-	run := func(key string, o CheckOptions, target string) {
-		outcome := checkRegistry[key](o)
+	run := func(key string, o CheckOptions, target string) error {
+		outcome, err := runCheck(ctx, key, o, target)
+		if err != nil {
+			return err
+		}
 		outcome.Target = sanitizeMessage(target)
 		outcome.Message = sanitizeMessage(outcome.Message)
 		outcomes = append(outcomes, outcome)
+		return nil
 	}
 	for _, key := range keys {
 		spec, targeted := checkTargets[key]
 		if !targeted {
-			run(key, opts, "")
+			if err := run(key, opts, ""); err != nil {
+				return nil, err
+			}
 			continue
 		}
 		for _, target := range spec.targets(opts) {
 			o := opts
 			spec.bind(&o, target)
-			run(key, o, target)
+			if err := run(key, o, target); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return outcomes, nil
+}
+
+// checkResult carries a check's outcome, or the panic it raised, out of the
+// goroutine that runs it.
+type checkResult struct {
+	outcome  CheckOutcome
+	panicked any
+	stack    []byte
+}
+
+// runCheck runs one check under its time limit (CheckOptions.checkTimeout).
+// The check runs in its own goroutine, so a check blocked in a system call,
+// such as statfs on an unresponsive NFS mount, cannot stall the run: when
+// the limit passes, runCheck reports FAIL and returns. Go cannot stop that
+// goroutine. The check's external commands are stopped through its
+// context, and anything still blocked ends when the process exits. A panic
+// in the check is raised again here, so main reports it as an internal
+// error (exit 3) rather than crashing from another goroutine.
+func runCheck(ctx context.Context, key string, o CheckOptions, target string) (CheckOutcome, error) {
+	start := time.Now()
+	if ctx.Err() != nil {
+		return runEnded(ctx, key, target, start, "not run")
+	}
+
+	limit := o.checkTimeout()
+	checkCtx, cancel := context.WithTimeoutCause(ctx, limit, errCheckTimeout)
+	defer cancel()
+
+	check := checkRegistry[key]
+	done := make(chan checkResult, 1) // buffered, so an abandoned check can still finish
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				done <- checkResult{panicked: r, stack: debug.Stack()}
+			}
+		}()
+		done <- checkResult{outcome: check(checkCtx, o)}
+	}()
+
+	select {
+	case r := <-done:
+		if r.panicked != nil {
+			panic(fmt.Sprintf("check %s panicked: %v\n\n%s", key, r.panicked, r.stack))
+		}
+		return r.outcome, nil
+	case <-checkCtx.Done():
+		// exec kills the check's tools from its own goroutine. Give the check
+		// a moment to return, so the kill has happened before Salus goes on
+		// (or exits, after a signal); a tool left running would have no time
+		// limit. A check blocked in a system call is abandoned after this.
+		select {
+		case <-done:
+		case <-time.After(commandWaitDelay + 100*time.Millisecond):
+		}
+	}
+	if errors.Is(context.Cause(checkCtx), errCheckTimeout) {
+		return stoppedOutcome(key, target, start, fmt.Sprintf("did not finish within %s (--check-timeout)", limit)), nil
+	}
+	return runEnded(ctx, key, target, start, "stopped")
+}
+
+// runEnded handles a check whose run context has ended. The run's time limit
+// yields a FAIL outcome (verb says whether the check was stopped or never
+// started); any other cause, such as a signal, is returned as the error.
+func runEnded(ctx context.Context, key, target string, start time.Time, verb string) (CheckOutcome, error) {
+	cause := context.Cause(ctx)
+	if !errors.Is(cause, errRunTimeout) {
+		return CheckOutcome{}, cause
+	}
+	return stoppedOutcome(key, target, start, verb+": the run time limit was reached (--run-timeout)"), nil
+}
+
+// stoppedOutcome is the FAIL outcome of a check that a time limit stopped.
+// Text output prints only the key, so the message names the target.
+func stoppedOutcome(key, target string, start time.Time, msg string) CheckOutcome {
+	if target != "" {
+		msg = target + ": " + msg
+	}
+	return CheckOutcome{Key: key, Status: StatusFail, Message: msg, Duration: time.Since(start)}
 }
 
 // sanitizeMessage replaces control characters with '?'. Messages embed
@@ -381,14 +533,14 @@ func sanitizeMessage(msg string) string {
 
 //--------------------------------------------------container & orchestration checks-------------------------------------------------------------------//
 
-func checkDockerStatus(opts CheckOptions) CheckOutcome {
+func checkDockerStatus(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
 
 	if !opts.hasTool("docker") {
 		return CheckOutcome{Key: keyDocker, Status: StatusWarn, Message: "docker CLI not found in PATH", Duration: time.Since(start)}
 	}
 
-	out, err := opts.command("docker", "info", "--format", "{{.ServerVersion}}")
+	out, err := opts.command(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
 	if err != nil {
 		return CheckOutcome{Key: keyDocker, Status: StatusFail, Message: fmt.Sprintf("docker daemon unreachable: %s", errorLine(string(out), err)), Duration: time.Since(start)}
 	}
@@ -405,7 +557,7 @@ func checkDockerStatus(opts CheckOptions) CheckOutcome {
 		{"unhealthy", []string{"ps", "--filter", "health=unhealthy", "--format", "{{.Names}}"}},
 		{"restarting", []string{"ps", "--all", "--filter", "status=restarting", "--format", "{{.Names}}"}},
 	} {
-		out, err := opts.command("docker", query.args...)
+		out, err := opts.command(ctx, "docker", query.args...)
 		if err != nil {
 			return CheckOutcome{Key: keyDocker, Status: StatusWarn, Message: fmt.Sprintf("%s; container health unknown: %s", msg, errorLine(string(out), err)), Duration: time.Since(start)}
 		}
@@ -474,7 +626,7 @@ var nodePressureConditions = []string{"MemoryPressure", "DiskPressure", "PIDPres
 // kubectlFor validates the --kube-context option and returns a kubectl runner
 // bound to it, plus a description of the cluster for messages. A non-nil
 // outcome means the check stops with that result.
-func kubectlFor(opts CheckOptions, key string, start time.Time) (func(args ...string) ([]byte, error), string, *CheckOutcome) {
+func kubectlFor(ctx context.Context, opts CheckOptions, key string, start time.Time) (func(args ...string) ([]byte, error), string, *CheckOutcome) {
 	kubeContext := strings.TrimSpace(opts.KubeContext)
 
 	if kubeContext != "" && !validKubeContext(kubeContext) {
@@ -491,7 +643,7 @@ func kubectlFor(opts CheckOptions, key string, start time.Time) (func(args ...st
 		if kubeContext != "" {
 			args = append([]string{"--context=" + kubeContext}, args...)
 		}
-		return opts.command("kubectl", args...)
+		return opts.command(ctx, "kubectl", args...)
 	}
 	cluster := "kubernetes cluster"
 	if kubeContext != "" {
@@ -500,9 +652,9 @@ func kubectlFor(opts CheckOptions, key string, start time.Time) (func(args ...st
 	return kubectl, cluster, nil
 }
 
-func checkKubernetesStatus(opts CheckOptions) CheckOutcome {
+func checkKubernetesStatus(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
-	kubectl, cluster, stop := kubectlFor(opts, keyKubernetes, start)
+	kubectl, cluster, stop := kubectlFor(ctx, opts, keyKubernetes, start)
 	if stop != nil {
 		return *stop
 	}
@@ -601,7 +753,7 @@ func validKubeContext(name string) bool {
 
 //--------------------------------------------------service & configuration checks---------------------------------------------------------------------//
 
-func checkServiceUptime(opts CheckOptions) CheckOutcome {
+func checkServiceUptime(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
 	name := strings.TrimSpace(opts.ServiceName)
 
@@ -622,7 +774,7 @@ func checkServiceUptime(opts CheckOptions) CheckOutcome {
 	}
 
 	// "--" ends option parsing, so the name can never be read as a systemctl flag.
-	out, err := opts.command("systemctl", "is-active", "--", name)
+	out, err := opts.command(ctx, "systemctl", "is-active", "--", name)
 	// Only the first line is used so messages stay single-line in reports.
 	state := firstLine(string(out), err)
 

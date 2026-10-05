@@ -68,7 +68,7 @@ func TestCheckKubernetesPods(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := fakeToolOptions(t, tt.installed, map[string]fakeResult{getPods: tt.result})
-			got := checkKubernetesPods(opts)
+			got := checkKubernetesPods(t.Context(), opts)
 			assertOutcome(t, got, keyKubePods, tt.wantStatus, tt.wantMessage)
 			assertCount(t, got, tt.wantCount)
 		})
@@ -81,7 +81,7 @@ func TestCheckKubernetesPodsWithNamespaceAndContext(t *testing.T) {
 	opts.KubeContext = "prod"
 	opts.KubeNamespace = "web"
 
-	assertOutcome(t, checkKubernetesPods(opts), keyKubePods, StatusPass, "namespace web (context prod): 1/1 pods Ready")
+	assertOutcome(t, checkKubernetesPods(t.Context(), opts), keyKubePods, StatusPass, "namespace web (context prod): 1/1 pods Ready")
 	if len(*calls) != 1 || (*calls)[0] != command {
 		t.Errorf("commands = %q, want %q", *calls, command)
 	}
@@ -91,7 +91,7 @@ func TestCheckKubernetesPodsRejectsInvalidNamespaces(t *testing.T) {
 	for _, namespace := range []string{"-n", "--all-namespaces", "Web", "web_1", "web.prod", "web-", strings.Repeat("a", 64), "a\x1bb"} {
 		opts, calls := fakeToolOptions(t, []string{"kubectl"}, nil)
 		opts.KubeNamespace = namespace
-		got := checkKubernetesPods(opts)
+		got := checkKubernetesPods(t.Context(), opts)
 		if got.Status != StatusFail || !strings.HasPrefix(got.Message, "invalid namespace ") {
 			t.Errorf("namespace %q: {%s %q}, want FAIL invalid namespace", namespace, got.Status, got.Message)
 		}
@@ -109,7 +109,7 @@ func TestCheckKubernetesPodsRejectsInvalidNamespaces(t *testing.T) {
 func TestCheckKubernetesPodsRejectsInvalidContext(t *testing.T) {
 	opts, calls := fakeToolOptions(t, []string{"kubectl"}, nil)
 	opts.KubeContext = "--kubeconfig=/tmp/x"
-	if got := checkKubernetesPods(opts); got.Status != StatusFail || !strings.HasPrefix(got.Message, "invalid kubeconfig context ") {
+	if got := checkKubernetesPods(t.Context(), opts); got.Status != StatusFail || !strings.HasPrefix(got.Message, "invalid kubeconfig context ") {
 		t.Errorf("checkKubernetesPods() = {%s %q}, want FAIL for the context", got.Status, got.Message)
 	}
 	if len(*calls) != 0 {

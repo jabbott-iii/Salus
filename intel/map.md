@@ -3,27 +3,38 @@
 Concise map of the Salus repository. Architecture rules live in
 [`maint.md`](maint.md).
 
-Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7).
+Last reviewed: 2026-10-04 (against `03964ff`, which carries M6 and P3-7; P7
+run-hardening changes added uncommitted on top of `b16129f`).
 
 ## Directory structure
 
 ```text
 Salus/
-├── main.go                     main() → run(): open/close DB, seed catalog, run Cobra root, map exit code
-├── main_test.go                End-to-end exit codes and persistence through run()
+├── main.go                     main() → run() → runWith(): open/close DB, seed catalog, run Cobra root,
+│                               map exit code; recovers panics as exit 3 (P7-6)
+├── main_test.go                End-to-end exit codes and persistence through run(); panic → exit 3
 ├── version.go                  Build version (set via -X main.version) + root command wiring
 ├── version_test.go
 ├── internal/                   Single Go package holding all application logic
 │   ├── logic-cli.go            Cobra commands: check list|run, jobs list|show|prune|diff|stats;
-│   │                           check run flags (targets, thresholds, --format/--output,
-│   │                           --fail-on, --retain) + validateLimits, jobs --json, parseAge
+│   │                           check run flags (targets, thresholds, --timeout/--check-timeout/
+│   │                           --run-timeout, --format/--output, --fail-on, --retain) +
+│   │                           validateLimits, stopSignalContext (SIGINT/SIGTERM), jobs --json, parseAge
 │   ├── logic-cli_test.go       Command tests: write errors, check run output/exit status/persistence,
 │   │                           flag → CheckOptions mapping, flag validation, formats, --output,
-│   │                           --fail-on, --retain, jobs JSON shapes, jobs prune, parseAge
+│   │                           --fail-on, --retain, jobs JSON shapes, jobs prune, parseAge,
+│   │                           report-before-save, interruption
+│   ├── logic-cli_unix_test.go  SIGTERM handling and inherited-ignored SIGINT (//go:build unix)
 │   ├── health.go               Check keys, CheckOutcome (target/value/unit), options, defaults,
-│   │                           thresholdStatus, registry + checkTargets, RunChecks; docker,
+│   │                           thresholdStatus, registry + checkTargets, RunChecks + runCheck
+│   │                           (per-check goroutine, --check-timeout/--run-timeout), opts.command; docker,
 │   │                           kubernetes-status (readiness + node pressure, kubectlFor),
 │   │                           service-uptime, misconfig rules (misconfigRules with stable ids)
+│   ├── health-exec.go          runExternal: WaitDelay, 8 MiB output cap (limitedBuffer), stop-signal grace
+│   ├── health-exec_unix.go     Process-group kill on cancel, endedByStopSignal (//go:build unix)
+│   ├── health-exec_other.go    No-op stopProcessGroup, endedByStopSignal false (//go:build !unix)
+│   ├── health-exec_test.go     command timeout messages, limitedBuffer, check/run time limits, panics
+│   ├── health-exec_unix_test.go    Real processes: group kill, leftover pipes, output cap, stop signals
 │   ├── health-thresholds.go    Threshold accessors + orDefault (//go:build linux || darwin || windows)
 │   ├── health-resources.go     diskSpaceOutcome, inodeOutcome (linux || darwin || windows)
 │   ├── health-disk_unix.go     disk space + inodes via statfs (linux || darwin)
@@ -58,11 +69,15 @@ Salus/
 │   ├── report-formats.go       writeReport: Nagios, Prometheus text format, JUnit XML;
 │   │                           writeFileAtomic for --output
 │   ├── report-formats_test.go  Golden output per format, escaping, atomic writes
-│   ├── database.go             GORM models, NewDatabase (owner-only file) + AutoMigrate, OpenDatabase, Close
+│   ├── database.go             GORM models, NewDatabase/OpenDatabase (owner-only file), connection
+│   │                           defaults, prepareDatabase (schemaVersion in PRAGMA user_version,
+│   │                           migrate + seed in one immediate transaction, read-only fallback), Close
 │   ├── database-path.go        SALUS_DB_PATH / per-user default path per OS, databaseFile
 │   ├── database-path_test.go   Path resolution per OS, file modes, read-only and ?param handling
-│   ├── database_test.go
-│   ├── seed.go                 Compiled-in feature catalog + EnsureDefaultFeatures
+│   ├── database_test.go        Schema and catalog, concurrent first open, schema versions, read-only
+│   │                           unversioned database, wantSchema golden (bump schemaVersion)
+│   ├── seed.go                 Compiled-in feature catalog, EnsureDefaultFeatures/seedCatalog
+│   │                           (firstOrInsert: ON CONFLICT DO NOTHING), catalogComplete
 │   ├── scan-store.go           ListFeatures, RecordScan, ListScanJobs, GetScanJob, PruneScanJobs
 │   ├── scan-store_test.go      Includes the v1.0.2 → M6 schema migration test
 │   ├── scan-history.go         diffResults (jobs diff), ScanStats (jobs stats)
@@ -103,7 +118,8 @@ flowchart LR
     main -. "lazy DatabaseOpener" .-> Open["OpenDatabase<br/>(database.go)"]
     Open --> dbpath["DatabasePath<br/>SALUS_DB_PATH or per-user default<br/>(database-path.go)"]
     Open --> NewDatabase["NewDatabase<br/>0700 dir / 0600 file"]
-    Open --> Seed["EnsureDefaultFeatures<br/>(seed.go)"]
+    Open --> Prepare["prepareDatabase<br/>user_version fast path, else one<br/>immediate transaction: AutoMigrate + seed"]
+    Prepare --> Seed["seedCatalog<br/>(seed.go)"]
 
     Root --> CheckList["check list"]
     Root --> CheckRun["check run"]
@@ -128,11 +144,12 @@ flowchart LR
 
     RunChecks --> Targets["checkTargets: one run per<br/>--disk-path / --service / --cert"]
     RunChecks --> Resources["disk space + inodes / memory /<br/>cpu / uptime<br/>(Linux: /proc, statfs; macOS: statfs,<br/>sysctl; Windows: kernel32)"]
-    RunChecks --> Exec["exec.CommandContext<br/>docker · kubectl · systemctl · timedatectl"]
+    RunChecks --> Exec["opts.command → runExternal<br/>docker · kubectl · systemctl · timedatectl<br/>(process group, WaitDelay, 8 MiB cap)"]
     RunChecks --> Files["--cert files (crypto/x509)"]
     RunChecks --> Misconfig["misconfig rules<br/>(HOME, DB/kubeconfig modes,<br/>Docker socket and TCP, PATH,<br/>sshd_config)"]
 
-    NewDatabase --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)")]
+    NewDatabase --> SQLite[("SQLite file<br/>GORM + go-sqlite3 (CGO)<br/>_busy_timeout=5000, _txlock=immediate")]
+    Prepare --> SQLite
     Seed --> SQLite
     RecordScan --> SQLite
     ListFeatures --> SQLite
@@ -158,21 +175,26 @@ sequenceDiagram
     opt without --no-save
         CLI->>DB: open database (created 0600 if missing)
     end
-    CLI->>C: keys, CheckOptions
+    CLI->>C: ctx (cancelled by SIGINT/SIGTERM), keys, CheckOptions
     loop each check key (sequential), once per target for targeted checks
-        C->>H: read /proc, statfs, or a file, or run a CLI (--timeout, default 3s)
-        H-->>C: data or error
+        C->>H: in its own goroutine, limited by --check-timeout (default 10 × --timeout) and --run-timeout: read /proc, statfs, or a file, or run a CLI (--timeout, default 3s)
+        H-->>C: data or error (a check past its limit is FAIL and abandoned)
     end
-    C-->>CLI: []CheckOutcome
-    alt without --no-save
-        CLI->>S: startedAt, outcomes
-        S->>DB: one transaction: insert ScanJob, N × ScanResult, mark completed
-        opt --retain
-            CLI->>DB: PruneScanJobs (cutoff never after this run's start)
+    alt signal during the checks
+        C-->>CLI: cancellation cause
+        CLI-->>U: exit 3, no report, nothing saved
+    else checks finished
+        C-->>CLI: []CheckOutcome
+        CLI-->>U: report in --format, to stdout or atomically to --output
+        opt without --no-save
+            CLI->>S: startedAt, outcomes
+            S->>DB: one transaction: insert ScanJob, N × ScanResult, mark completed (failure: exit 3)
+            opt --retain
+                CLI->>DB: PruneScanJobs (cutoff never after this run's start)
+            end
         end
+        CLI-->>U: nil or *ExitStatusError → main.run returns exit 0 | 1 | 2 after --fail-on (3 on errors)
     end
-    CLI-->>U: report in --format, to stdout or atomically to --output
-    CLI-->>U: nil or *ExitStatusError → main.run returns exit 0 | 1 | 2 after --fail-on (3 on errors)
 ```
 
 ## Data model

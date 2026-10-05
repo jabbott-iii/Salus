@@ -20,8 +20,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"runtime/debug"
 
 	"github.com/jabbott-iii/Salus/internal"
+	"github.com/spf13/cobra"
 )
 
 func main() {
@@ -31,7 +33,13 @@ func main() {
 // run executes the CLI and returns the process exit code: 0/1/2 for a check
 // run's PASS/WARN/FAIL result, and internal.ExitCodeError for operational
 // errors. Returning instead of exiting lets the database close first.
-func run(args []string, stdout, stderr io.Writer) (code int) {
+func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(newRootCmd, args, stdout, stderr)
+}
+
+// runWith is run with the command tree's constructor as a parameter, so
+// tests can exercise the panic handling.
+func runWith(build func(internal.DatabaseOpener) *cobra.Command, args []string, stdout, stderr io.Writer) (code int) {
 	// The database is opened only when a command needs it, at most once.
 	var db *internal.Database
 	openDB := func() (*internal.Database, error) {
@@ -61,7 +69,17 @@ func run(args []string, stdout, stderr io.Writer) (code int) {
 		}
 	}()
 
-	rootCmd := newRootCmd(openDB)
+	// A panic is a bug in Salus, not a check result. Without this, Go would
+	// exit with 2, the code for a FAIL result. Registered after the database
+	// close above, so it runs first and the database still closes.
+	defer func() {
+		if r := recover(); r != nil {
+			_, _ = fmt.Fprintf(stderr, "Error: internal error: %v\n%s", r, debug.Stack())
+			code = internal.ExitCodeError
+		}
+	}()
+
+	rootCmd := build(openDB)
 	rootCmd.SetArgs(args)
 	rootCmd.SetOut(stdout)
 	rootCmd.SetErr(stderr)

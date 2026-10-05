@@ -221,7 +221,7 @@ func TestCheckDockerStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, calls := fakeToolOptions(t, tt.installed, tt.results)
-			assertOutcome(t, checkDockerStatus(opts), keyDocker, tt.wantStatus, tt.wantMessage)
+			assertOutcome(t, checkDockerStatus(t.Context(), opts), keyDocker, tt.wantStatus, tt.wantMessage)
 			if len(tt.installed) == 0 && len(*calls) != 0 {
 				t.Errorf("commands run without docker installed: %q", *calls)
 			}
@@ -402,7 +402,7 @@ func TestCheckKubernetesStatus(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := fakeToolOptions(t, tt.installed, tt.results)
-			assertOutcome(t, checkKubernetesStatus(opts), keyKubernetes, tt.wantStatus, tt.wantMessage)
+			assertOutcome(t, checkKubernetesStatus(t.Context(), opts), keyKubernetes, tt.wantStatus, tt.wantMessage)
 		})
 	}
 }
@@ -416,7 +416,7 @@ func TestCheckKubernetesStatusWithContext(t *testing.T) {
 	opts.KubeContext = " arn:aws:eks:us-east-1:123456789012:cluster/prod "
 
 	want := "kubernetes cluster (context arn:aws:eks:us-east-1:123456789012:cluster/prod) reachable; 1/1 nodes Ready"
-	assertOutcome(t, checkKubernetesStatus(opts), keyKubernetes, StatusPass, want)
+	assertOutcome(t, checkKubernetesStatus(t.Context(), opts), keyKubernetes, StatusPass, want)
 	if len(*calls) != 2 {
 		t.Errorf("ran %q, want cluster-info and get nodes", *calls)
 	}
@@ -428,7 +428,7 @@ func TestCheckKubernetesStatusRejectsInvalidContexts(t *testing.T) {
 			opts, calls := fakeToolOptions(t, []string{"kubectl"}, nil)
 			opts.KubeContext = name
 
-			got := checkKubernetesStatus(opts)
+			got := checkKubernetesStatus(t.Context(), opts)
 			if got.Status != StatusFail || !strings.HasPrefix(got.Message, "invalid kubeconfig context ") {
 				t.Errorf("outcome = {%s %q}, want FAIL for an invalid context", got.Status, got.Message)
 			}
@@ -468,7 +468,7 @@ func TestCheckServiceUptimeWithService(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		opts, calls := fakeToolOptions(t, []string{"systemctl"}, nil)
 		opts.ServiceName = "nginx"
-		assertOutcome(t, checkServiceUptime(opts), keyServiceUptime, StatusWarn, "service uptime check requires systemd (Linux only)")
+		assertOutcome(t, checkServiceUptime(t.Context(), opts), keyServiceUptime, StatusWarn, "service uptime check requires systemd (Linux only)")
 		if len(*calls) != 0 {
 			t.Errorf("commands run on %s: %q", runtime.GOOS, *calls)
 		}
@@ -514,7 +514,7 @@ func TestCheckServiceUptimeWithService(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := fakeToolOptions(t, tt.installed, tt.results)
 			opts.ServiceName = " nginx "
-			assertOutcome(t, checkServiceUptime(opts), keyServiceUptime, tt.wantStatus, tt.wantMessage)
+			assertOutcome(t, checkServiceUptime(t.Context(), opts), keyServiceUptime, tt.wantStatus, tt.wantMessage)
 		})
 	}
 }
@@ -533,7 +533,7 @@ func TestCommandAppliesTimeout(t *testing.T) {
 	}
 
 	before := time.Now()
-	if _, err := opts.command("docker", "info"); err != nil {
+	if _, err := opts.command(t.Context(), "docker", "info"); err != nil {
 		t.Fatalf("command() error = %v", err)
 	}
 	if remaining := deadline.Sub(before); remaining <= 0 || remaining > time.Second {
@@ -837,7 +837,7 @@ func TestCheckServiceUptimeRejectsInvalidNames(t *testing.T) {
 			opts.ServiceName = name
 
 			want := fmt.Sprintf("invalid service name %q: use a systemd unit name such as nginx or nginx.service", name)
-			assertOutcome(t, checkServiceUptime(opts), keyServiceUptime, StatusFail, want)
+			assertOutcome(t, checkServiceUptime(t.Context(), opts), keyServiceUptime, StatusFail, want)
 			if len(*calls) != 0 {
 				t.Errorf("ran %q for an invalid service name", *calls)
 			}
@@ -869,7 +869,7 @@ func TestRunChecksSanitizesToolOutput(t *testing.T) {
 		"docker info --format {{.ServerVersion}}": {out: "\x1b]0;pwned\x07\x1b[2KCannot connect\n", err: errors.New("exit status 1")},
 	})
 
-	outcomes, err := RunChecks([]string{keyDocker}, opts)
+	outcomes, err := RunChecks(t.Context(), []string{keyDocker}, opts)
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}

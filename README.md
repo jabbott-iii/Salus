@@ -301,7 +301,16 @@ Flags for `check run`:
   defaults, `cpu-load` warns from 80% busy and fails only when every CPU was
   busy for the whole sample.
 - `--timeout` — time limit for each external command (`docker`, `kubectl`,
-  `systemctl`, `timedatectl`; default `3s`)
+  `systemctl`, `timedatectl`; default `3s`). When it passes, Salus kills the
+  command together with any processes it started (on Linux and macOS), and
+  the result says `<command> timed out after <duration>`.
+- `--check-timeout` — time limit for each check, and for each target of a
+  check that runs per target (default 10 times `--timeout`, so `30s`). A check
+  still running when it passes, for example `disk-space` on an unresponsive
+  NFS mount, reports `FAIL` with `did not finish within <duration>`, and the
+  run continues with the next check. It cannot be lower than `--timeout`.
+- `--run-timeout` — time limit for the whole run (default: none). Checks it
+  stops, and checks it keeps from starting, report `FAIL`.
 - `--format` — report format: `text` (default), `json`, `nagios`,
   `prometheus`, or `junit` (see [Output formats](#output-formats))
 - `--json` — output results as JSON (same as `--format json`; combining it
@@ -324,8 +333,9 @@ lower than its FAIL value, and disk, inode, and memory values cannot exceed
 `100`. If you set a FAIL value below the default WARN value, lower the WARN
 value too (for example `--disk-warn 60 --disk-fail 75`). `--timeout` takes a
 duration such as `500ms`, `10s`, or `1m` and must be positive, and
-`--cert-warn-days` must be a positive whole number. Salus rejects an invalid
-value before opening the database or running any check.
+`--cert-warn-days` must be a positive whole number. `--check-timeout` and
+`--run-timeout` take the same durations; `0` means the default. Salus rejects
+an invalid value before opening the database or running any check.
 
 `cert-expiry` runs only when at least one `--cert` file is given: a plain
 `check run` skips it, and `check run --only cert-expiry` without `--cert` is
@@ -335,7 +345,7 @@ What each check reports:
 
 | Check | PASS | WARN | FAIL |
 |---|---|---|---|
-| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs, and every Windows volume) | At or above the WARN threshold; not Linux, macOS, or Windows; on Windows, CPU usage unknown | At or above the FAIL threshold; data unreadable or path missing |
+| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs, and every Windows volume) | At or above the WARN threshold; not Linux, macOS, or Windows; on Windows, CPU usage unknown; on Linux, memory usage unknown (`/proc/meminfo` without `MemTotal` or `MemAvailable`) | At or above the FAIL threshold; data unreadable or path missing |
 | `docker-status` | Daemon reachable, no unhealthy or restarting containers | Unhealthy or restarting containers; container list unavailable; no `docker` CLI | Daemon unreachable |
 | `kubernetes-status` | Cluster reachable and every node Ready without pressure, or listing nodes is forbidden | Some nodes NotReady; nodes reporting MemoryPressure, DiskPressure, or PIDPressure; readiness unknown; no `kubectl` CLI | Cluster unreachable (a Forbidden answer counts as reachable); no node Ready; invalid `--kube-context` |
 | `kubernetes-pods` | Every pod Ready (completed pods are ignored), no pods, or listing pods is forbidden | Pods in CrashLoopBackOff, Failed, or not Ready; pod list unavailable; no `kubectl` CLI | Invalid `--kube-namespace` or `--kube-context` |
@@ -344,6 +354,9 @@ What each check reports:
 | `time-sync` | System clock synchronized | Clock not synchronized; status unknown; systemd not running; not Linux or no `timedatectl` | — |
 | `cert-expiry` | Valid for at least `--cert-warn-days` more days | Expires within `--cert-warn-days` | Expired or not yet valid; file missing, unreadable, larger than 1 MiB, or without a certificate |
 | `misconfig` | No problems found | One or more of the problems below | — |
+
+Any check that does not finish within `--check-timeout`, or that
+`--run-timeout` stops or keeps from starting, reports `FAIL`.
 
 `cert-expiry` reports the certificate in the file that expires first, which in
 a chain file is usually the server certificate. Messages name the certificate
@@ -411,6 +424,10 @@ the other objects have neither field:
 The checks keep their positions in the array: checks added after 1.0.2 come
 after `misconfig`.
 
+The JSON shape is stable: later versions may add fields to these objects, but
+do not rename or remove fields or change their types, and the output stays an
+array. Ignore fields you do not know.
+
 #### Output formats
 
 `--format` selects the report format, and `--output <file>` writes it to a
@@ -425,10 +442,12 @@ not a symbolic link; Salus checks this before running any check.
 
 - **`nagios`** — Nagios plugin output, also understood by Icinga and Zabbix.
   The first line holds the state (`OK`, `WARNING`, or `CRITICAL`, from the
-  exit code, so `--fail-on` applies), the result counts, and performance data
+  check results, so `--fail-on` applies), the result counts, and performance data
   for each result with a value, such as `'disk-space /'=46.13%`. One line per
   result follows. `|` in messages is replaced with `/`, because it separates
-  performance data.
+  performance data. If saving the run fails after the report is written, the
+  report still shows the check state, but Salus exits `3`, which Nagios reads
+  as UNKNOWN.
 
   ```text
   SALUS WARNING - 3 checks: 2 pass, 1 warn, 0 fail | 'disk-space /'=46.13% 'memory'=85.02%
@@ -540,6 +559,16 @@ that cannot be written. `jobs diff --exit-code` exits `1` when results
 changed. Errors are written to stderr, so stdout carries only command output
 (for example, clean JSON with `--json`).
 
+`check run` writes its report before it saves the run, so if saving fails
+(for example when another process holds the database lock for more than five
+seconds, or the disk is full), the report is still written, and Salus exits
+`3`. If `check run` receives `SIGINT` (Ctrl-C) or `SIGTERM` while checks are
+running, it stops them and the commands they started, writes no report,
+saves nothing, and exits `3`. A second signal ends it at once. A signal that
+the process inherited as ignored, such as `SIGINT` for a background job of a
+non-interactive shell, stays ignored. An internal error (a bug in Salus) is
+reported on stderr, also with exit code `3`.
+
 ## Configuration
 
 Salus stores job history in a SQLite database. The database is created on the
@@ -563,6 +592,13 @@ Default database location when `SALUS_DB_PATH` is not set:
 Salus creates a new database file with mode `0600` and any missing parent
 directories with mode `0700`. The `misconfig` check warns if the database file
 is readable or writable by group or other users (on Linux and macOS).
+
+Several Salus processes can use the same database at once, for example two
+cron entries that start in the same minute. A process waits up to five
+seconds for another one's write to finish. `SALUS_DB_PATH` may end with
+go-sqlite3 connection parameters, such as `?_busy_timeout=10000` for a longer
+wait; Salus adds `_busy_timeout=5000` and `_txlock=immediate` unless the path
+sets them.
 
 Check thresholds, targets, and the command timeout are set for each run with
 the `check run` flags above. There is no configuration file.
@@ -606,8 +642,26 @@ Other changes:
   comparison after the upgrade does not report every disk or service result
   as removed and added.
 - The first command after the upgrade that opens the database adds three
-  columns to its results table and the new checks to its catalog, so it needs
-  write access to the database file once.
+  columns to its results table and the new checks to its catalog, and records
+  the schema version in the database, so it needs write access to the
+  database file once. A database that is already current still opens
+  read-only.
+- `check run` writes the report before saving the run. When saving fails,
+  the report (and an `--output` file) is still written; the exit code is `3`,
+  as before.
+- A check that hangs is stopped after `--check-timeout` (default `30s`) and
+  reports `FAIL`. External commands now stop at `--timeout` even when they
+  started other processes that keep running, such as kubectl credential
+  plugins; on Linux and macOS those processes are killed with the command.
+  Commands run in their own process group there, so a command that tries to
+  prompt on the terminal (for example ssh asking for a key passphrase for an
+  `ssh://` `DOCKER_HOST`) is stopped and times out. A command that prints more
+  than 8 MiB of output fails its check.
+- `SIGINT` and `SIGTERM` during `check run` end it with exit code `3`,
+  without a report or a saved run (1.0.2 was killed by the signal).
+- On Linux, `memory` reports `WARN` ("memory usage unknown") when
+  `/proc/meminfo` has no `MemTotal` or `MemAvailable` (kernels before 3.14),
+  instead of `FAIL` or `PASS` from a made-up value.
 
 ### Upgrading from 1.0.0
 

@@ -53,7 +53,7 @@ func TestRunChecksDefaultsToAllChecks(t *testing.T) {
 	// No external tools are "installed", so docker/kubectl/systemctl/timedatectl
 	// are never executed. Without --cert, cert-expiry is skipped.
 	opts, calls := fakeToolOptions(t, nil, nil)
-	outcomes, err := RunChecks(nil, opts)
+	outcomes, err := RunChecks(t.Context(), nil, opts)
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRunChecksRunsTargetedChecksPerTarget(t *testing.T) {
 	})
 	opts.ServiceNames = []string{"nginx", "sshd", "nginx"}
 
-	outcomes, err := RunChecks([]string{keyServiceUptime, keyMisconfig}, opts)
+	outcomes, err := RunChecks(t.Context(), []string{keyServiceUptime, keyMisconfig}, opts)
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -126,7 +126,7 @@ func TestRunChecksRunsTargetedChecksPerTarget(t *testing.T) {
 
 func TestRunChecksRunsRepeatedKeysOnce(t *testing.T) {
 	isolateMisconfigEnv(t)
-	outcomes, err := RunChecks([]string{keyMisconfig, keyTimeSync, keyMisconfig}, CheckOptions{})
+	outcomes, err := RunChecks(t.Context(), []string{keyMisconfig, keyTimeSync, keyMisconfig}, CheckOptions{})
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -162,7 +162,7 @@ func TestCheckTargets(t *testing.T) {
 
 func TestRunChecksSanitizesTargets(t *testing.T) {
 	isolateMisconfigEnv(t)
-	outcomes, err := RunChecks([]string{keyCertExpiry}, CheckOptions{CertPaths: []string{"bad\x1b[2Jname.pem"}})
+	outcomes, err := RunChecks(t.Context(), []string{keyCertExpiry}, CheckOptions{CertPaths: []string{"bad\x1b[2Jname.pem"}})
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRunChecksSanitizesTargets(t *testing.T) {
 }
 
 func TestRunChecksSubset(t *testing.T) {
-	outcomes, err := RunChecks([]string{keyMisconfig}, CheckOptions{})
+	outcomes, err := RunChecks(t.Context(), []string{keyMisconfig}, CheckOptions{})
 	if err != nil {
 		t.Fatalf("RunChecks() error = %v", err)
 	}
@@ -182,7 +182,7 @@ func TestRunChecksSubset(t *testing.T) {
 }
 
 func TestRunChecksUnknownKey(t *testing.T) {
-	if _, err := RunChecks([]string{"does-not-exist"}, CheckOptions{}); err == nil {
+	if _, err := RunChecks(t.Context(), []string{"does-not-exist"}, CheckOptions{}); err == nil {
 		t.Fatal("RunChecks() expected error for unknown check key, got nil")
 	}
 }

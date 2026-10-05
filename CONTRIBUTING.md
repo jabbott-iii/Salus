@@ -102,8 +102,10 @@ request.
   contracts. Do not change them without explicit approval on the issue.
 - **Errors.** Wrap errors with context (`fmt.Errorf("...: %w", err)`), and
   check and return every write to a command's output writer.
-- **External commands.** Use `exec.CommandContext` with a timeout and separate
-  arguments. Never invoke a shell, and validate user-supplied arguments.
+- **External commands.** Run tools only through `opts.command(ctx, ...)`, which
+  applies `--timeout`, kills the processes a tool started, and bounds its
+  output. Pass arguments separately, never invoke a shell, and validate
+  user-supplied arguments.
 - **Dependencies.** Prefer the standard library and existing dependencies.
   Explain any new dependency in the issue, and update `NOTICE` when the module
   graph changes.

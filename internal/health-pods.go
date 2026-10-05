@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"context"
 	"fmt"
 	"regexp"
 	"slices"
@@ -45,14 +46,14 @@ func validNamespace(name string) bool {
 // checkKubernetesPods reports pods that are crash-looping, failed, or not
 // Ready in one namespace. Those are WARN (Q-014): the cluster works, a
 // workload does not. Completed pods (phase Succeeded) are ignored.
-func checkKubernetesPods(opts CheckOptions) CheckOutcome {
+func checkKubernetesPods(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
 	namespace := strings.TrimSpace(opts.KubeNamespace)
 	if namespace != "" && !validNamespace(namespace) {
 		return CheckOutcome{Key: keyKubePods, Status: StatusFail, Message: fmt.Sprintf("invalid namespace %q: use a Kubernetes namespace name such as default or kube-system", namespace), Duration: time.Since(start)}
 	}
 
-	kubectl, _, stop := kubectlFor(opts, keyKubePods, start)
+	kubectl, _, stop := kubectlFor(ctx, opts, keyKubePods, start)
 	if stop != nil {
 		return *stop
 	}

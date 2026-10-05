@@ -26,6 +26,7 @@ import (
 	"testing"
 
 	"github.com/jabbott-iii/Salus/internal"
+	"github.com/spf13/cobra"
 )
 
 // isolateHostEnv hides the host's kubeconfig, Docker endpoint, PATH, and
@@ -228,5 +229,25 @@ func TestRunJobsDiffExitCode(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "[added ") || stderr.Len() != 0 {
 		t.Errorf("stdout = %q, stderr = %q; want the added result and no error", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunReportsPanicAsOperationalError(t *testing.T) {
+	panicking := func(internal.DatabaseOpener) *cobra.Command {
+		return &cobra.Command{
+			Use:  "salus",
+			RunE: func(*cobra.Command, []string) error { panic("boom") },
+		}
+	}
+
+	var stdout, stderr bytes.Buffer
+	if code := runWith(panicking, nil, &stdout, &stderr); code != internal.ExitCodeError {
+		t.Errorf("runWith() exit code = %d, want %d (not 2, which means FAIL)", code, internal.ExitCodeError)
+	}
+	if !strings.HasPrefix(stderr.String(), "Error: internal error: boom\n") {
+		t.Errorf("stderr = %q, want the panic reported as an internal error", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", stdout.String())
 	}
 }

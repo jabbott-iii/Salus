@@ -9,7 +9,9 @@ Last reviewed: 2026-10-04 (against `03964ff`, which carries M5, M6, and P3-7,
 and the uncommitted `SECURITY.md` policy (P4-4); v1.0.2 is at `08b2faa`). The
 M6 review of new inputs and outputs found no new issue; its controls are listed
 under "Existing controls observed". SEC-009 is Closed; SEC-003 and SEC-005
-still wait on maintainer checks.
+still wait on maintainer checks. SEC-010 (found in the 2026-10-04
+production-readiness review) is In Progress: implemented and validated
+locally as P7-3, uncommitted, waiting for CI on macOS and Windows.
 
 ## Threat model summary
 
@@ -48,7 +50,8 @@ still wait on maintainer checks.
 ## Security requirements
 
 1. Never execute external commands through a shell. Pass arguments separately
-   via `exec.CommandContext` with a timeout.
+   via `exec.CommandContext` with a timeout that also ends the processes the
+   command started, and bound the output kept in memory (SEC-010).
 2. Validate every user-supplied value before it becomes an argument to an
    external command.
 3. Use GORM query builders or parameterized queries only. Never concatenate
@@ -81,7 +84,9 @@ still wait on maintainer checks.
 ## Existing controls observed
 
 - External commands use `exec.CommandContext` with separate arguments and a
-  default 3s timeout (`health.go`, configurable with `--timeout`).
+  default 3s timeout (`health.go`, configurable with `--timeout`). Since P7-3
+  they run through `runExternal` (`health-exec.go`): `WaitDelay`, a
+  process-group kill on Unix, and an 8 MiB output limit (SEC-010).
 - User values that reach external tools are validated first (requirement 2).
   - `--service` is passed after `--` (SEC-001).
   - `--kube-context` must pass `validKubeContext`: no leading `-`, no control
@@ -657,3 +662,54 @@ GitHub, because the available token cannot read it.
   - Tests: `TestSanitizeMessage`, `TestRunChecksSanitizesToolOutput`, and
     `TestJobsShowSanitizesStoredMessages` (text and `--json`, with ESC, DEL,
     and C1).
+
+### SEC-010: `--timeout` does not bound external commands, and their output is unbounded
+
+- **Status:** In Progress (implemented 2026-10-04 as P7-3, uncommitted;
+  awaiting CI on macOS and Windows)
+- **Affected component:** `internal/health.go` (`CheckOptions.command`, which
+  called `exec.CommandContext(...).CombinedOutput()`)
+- **Risk:** Low to Medium (availability). Found in the 2026-10-04
+  production-readiness review and reproduced:
+  - `exec.CommandContext` killed only the tool on timeout. `CombinedOutput`
+    then read until every process holding the output pipe closed it, so a
+    process the tool started (a kubectl exec credential plugin, a wrapper
+    script) kept Salus waiting. With a fake `kubectl` that starts a
+    background `sleep 60`, `check run --timeout 1s` took 60 seconds, and the
+    orphaned process kept running.
+  - Combined output was buffered in memory without a limit for the whole
+    timeout window. A hostile or compromised Docker daemon or Kubernetes API
+    server (the attacker in SEC-009) could make the CLI print without bound.
+  - The result said `signal: killed` instead of naming the timeout.
+  - Under cron, stuck runs pile up; under a systemd timer, monitoring goes
+    silent, because the next run waits for the stuck one.
+- **Required remediation:** Set `cmd.WaitDelay`; on Unix, start each tool in
+  its own process group and kill the group on cancellation; cap the output
+  kept and fail the command beyond it; report timeouts as such. Bound whole
+  checks too, because checks that run no tool (`statfs` on an unresponsive
+  NFS mount) can also block (P7-4).
+- **Validation:** Unit tests with real processes on Unix (group kill,
+  leftover pipe holder, output cap), fake-runner tests of the timeout
+  message, the reproduction above returning within about one second, and CI
+  green on ubuntu, macOS, and Windows.
+- **Resolution:** Pending CI. Implemented in the working tree on 2026-10-04:
+  - `runExternal` (`health-exec.go`): `WaitDelay` of 1s, `maxCommandOutput`
+    8 MiB (`limitedBuffer` keeps draining the pipe and the command fails
+    beyond the limit), and `exec.ErrWaitDelay` after a successful exit
+    treated as success.
+  - `stopProcessGroup` (`health-exec_unix.go`): `Setpgid`, and `Cmd.Cancel`
+    sends SIGKILL to the group. Windows and other non-Unix platforms keep
+    exec's default (the tool only; `WaitDelay` still bounds the wait).
+  - `opts.command` returns `<tool> timed out after <d>` and no output.
+  - Local validation (Linux, Go 1.26.8): the reproduction above now ends
+    after 1.01s with `kubectl timed out after 1s` and no leftover process;
+    `TestRunExternalKillsProcessGroupOnTimeout`,
+    `TestRunExternalStopsWaitingForLeftoverProcess`,
+    `TestRunExternalRejectsOversizedOutput`, and `TestCommandReportsTimeout`
+    pass, and fail when the group kill or `WaitDelay` is removed. macOS and
+    Windows compile and vet; their tests have not run yet.
+  - Known limits: tools now run in a background process group on a
+    terminal, so a tool that prompts on `/dev/tty` is stopped and times out
+    (documented in the README upgrade notes). A goroutine blocked in a system
+    call cannot be stopped; `runCheck` abandons it (P7-4).
+

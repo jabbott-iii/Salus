@@ -17,6 +17,7 @@ limitations under the License.
 package internal
 
 import (
+	"context"
 	"fmt"
 	"runtime"
 	"strings"
@@ -33,7 +34,7 @@ func systemdNotRunning(output string) bool {
 // checkSystemdFailed reports systemd units in the failed state. A failed unit
 // is a WARN: systemd itself works, and some units fail harmlessly, but each
 // one deserves a look.
-func checkSystemdFailed(opts CheckOptions) CheckOutcome {
+func checkSystemdFailed(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
 
 	if runtime.GOOS != "linux" {
@@ -43,7 +44,7 @@ func checkSystemdFailed(opts CheckOptions) CheckOutcome {
 		return CheckOutcome{Key: keySystemdFailed, Status: StatusWarn, Message: "systemctl not found in PATH", Duration: time.Since(start)}
 	}
 
-	out, err := opts.command("systemctl", "list-units", "--state=failed", "--plain", "--no-legend", "--no-pager")
+	out, err := opts.command(ctx, "systemctl", "list-units", "--state=failed", "--plain", "--no-legend", "--no-pager")
 	if err != nil {
 		if systemdNotRunning(string(out)) {
 			return CheckOutcome{Key: keySystemdFailed, Status: StatusWarn, Message: "systemd is not running on this host", Duration: time.Since(start)}
@@ -85,7 +86,7 @@ func failedUnits(out string) []string {
 // kernel sees it. That works with systemd-timesyncd, chrony, and ntpd alike.
 // An unsynchronized clock is a WARN: it drifts, which breaks TLS validation,
 // Kerberos and Active Directory logins, and log correlation over time.
-func checkTimeSync(opts CheckOptions) CheckOutcome {
+func checkTimeSync(ctx context.Context, opts CheckOptions) CheckOutcome {
 	start := time.Now()
 
 	if runtime.GOOS != "linux" {
@@ -95,7 +96,7 @@ func checkTimeSync(opts CheckOptions) CheckOutcome {
 		return CheckOutcome{Key: keyTimeSync, Status: StatusWarn, Message: "timedatectl not found in PATH", Duration: time.Since(start)}
 	}
 
-	out, err := opts.command("timedatectl", "show", "--property=NTP", "--property=NTPSynchronized")
+	out, err := opts.command(ctx, "timedatectl", "show", "--property=NTP", "--property=NTPSynchronized")
 	if err != nil {
 		if systemdNotRunning(string(out)) {
 			return CheckOutcome{Key: keyTimeSync, Status: StatusWarn, Message: "systemd is not running on this host", Duration: time.Since(start)}

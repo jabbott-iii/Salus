@@ -46,6 +46,33 @@ func TestParseMeminfo(t *testing.T) {
 	}
 }
 
+func TestMemoryOutcome(t *testing.T) {
+	tests := []struct {
+		name        string
+		meminfo     string
+		wantStatus  CheckStatus
+		wantMessage string
+		wantValue   bool
+	}{
+		{name: "usage computed", meminfo: meminfoFixture, wantStatus: StatusPass, wantMessage: "memory 75.0% used, swap 25.0% used", wantValue: true},
+		{name: "no MemAvailable (kernel before 3.14)", meminfo: "MemTotal: 8000000 kB\nMemFree: 500000 kB\n", wantStatus: StatusWarn, wantMessage: "memory usage unknown: /proc/meminfo has no MemAvailable"},
+		{name: "no MemTotal", meminfo: "MemAvailable: 2000000 kB\n", wantStatus: StatusWarn, wantMessage: "memory usage unknown: /proc/meminfo has no MemTotal"},
+		{name: "empty", meminfo: "", wantStatus: StatusWarn, wantMessage: "memory usage unknown: /proc/meminfo has no MemTotal and MemAvailable"},
+		{name: "malformed MemAvailable", meminfo: "MemTotal: 8000000 kB\nMemAvailable: lots kB\n", wantStatus: StatusWarn, wantMessage: "memory usage unknown: /proc/meminfo has no MemAvailable"},
+		{name: "zero MemTotal", meminfo: "MemTotal: 0 kB\nMemAvailable: 0 kB\n", wantStatus: StatusWarn, wantMessage: "memory usage unknown: /proc/meminfo reports MemTotal 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := memoryOutcome(parseMeminfo([]byte(tt.meminfo)), CheckOptions{}, time.Now())
+			assertOutcome(t, got, keyMemory, tt.wantStatus, tt.wantMessage)
+			if (got.Value != nil) != tt.wantValue {
+				t.Errorf("value = %v, want a value: %v", got.Value, tt.wantValue)
+			}
+		})
+	}
+}
+
 func TestParseLoadAverage(t *testing.T) {
 	tests := []struct {
 		name    string

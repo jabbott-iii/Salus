@@ -26,7 +26,7 @@ const notBooted = "System has not been booted with systemd as init system (PID 1
 
 func TestCheckSystemdFailed(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		got := checkSystemdFailed(CheckOptions{})
+		got := checkSystemdFailed(t.Context(), CheckOptions{})
 		assertOutcome(t, got, keySystemdFailed, StatusWarn, "failed units check requires systemd (Linux only)")
 		return
 	}
@@ -63,7 +63,7 @@ func TestCheckSystemdFailed(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := fakeToolOptions(t, tt.installed, map[string]fakeResult{listFailed: tt.result})
-			got := checkSystemdFailed(opts)
+			got := checkSystemdFailed(t.Context(), opts)
 			assertOutcome(t, got, keySystemdFailed, tt.wantStatus, tt.wantMessage)
 			assertCount(t, got, tt.wantCount)
 		})
@@ -83,7 +83,7 @@ func assertCount(t *testing.T, got CheckOutcome, want float64) {
 
 func TestCheckTimeSync(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		got := checkTimeSync(CheckOptions{})
+		got := checkTimeSync(t.Context(), CheckOptions{})
 		assertOutcome(t, got, keyTimeSync, StatusWarn, "time sync check requires systemd (Linux only)")
 		return
 	}
@@ -108,7 +108,7 @@ func TestCheckTimeSync(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			opts, _ := fakeToolOptions(t, tt.installed, map[string]fakeResult{show: tt.result})
-			assertOutcome(t, checkTimeSync(opts), keyTimeSync, tt.wantStatus, tt.wantMessage)
+			assertOutcome(t, checkTimeSync(t.Context(), opts), keyTimeSync, tt.wantStatus, tt.wantMessage)
 		})
 	}
 }

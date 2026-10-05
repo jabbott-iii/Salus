@@ -279,8 +279,8 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   report WARN, like the other Linux-only checks; without `kubectl`,
   `kubernetes-pods` reports WARN like `kubernetes-status`. The CI, CD, and
   Docker smoke steps use `--only`, so they are unaffected.
-- **Seeded catalog text is insert-only.** `EnsureDefaultFeatures` uses
-  `FirstOrCreate`, so changes to names or descriptions in `seed.go` reach only
+- **Seeded catalog text is insert-only.** Seeding uses `FirstOrCreate`
+  (`firstOrInsert` since P7-1), so changes to names or descriptions in `seed.go` reach only
   new databases. Updating rows on every open would break read-only databases.
   M5 left the `docker-status` and `kubernetes-status` descriptions
   ("reachable") as they were. M6 updated them in `seed.go` (and the
@@ -315,6 +315,32 @@ static Linux linking with `sqlite_omit_load_extension,osusergo,netgo`.
   default logger line (source path, SQL, colors) to stdout, and slow-query
   warnings could corrupt `--json`. *Resolved 2026-09-27 (P1-11):* the GORM
   logger is silent.
+
+### Unattended-run hardening (M7, 2026-10-04)
+
+- **Abandoned checks.** `runCheck` gives up on a check that passes its time
+  limit, but Go cannot stop a goroutine blocked in a system call. The
+  goroutine stays until the system call returns or the process exits, so a
+  hung NFS mount can leave one goroutine (and its thread) per affected
+  target for the rest of the run. Checks must not write shared state.
+- **Signals and process groups.** Tools run in their own process group on
+  Unix (P7-3), so a terminal's Ctrl-C reaches only Salus, which then kills
+  the groups. A tool that reads `/dev/tty` (an ssh passphrase prompt for an
+  `ssh://` `DOCKER_HOST`) is stopped by the terminal and times out. With the
+  default 3s `--timeout`, such prompts were not practical before either.
+- **Signal races.** When systemd stops a service it signals the whole control
+  group, so a tool can die from the same SIGTERM before Salus's handler
+  cancels the run. `runExternal` waits up to `stopSignalGrace` (250ms) for
+  that cancellation when a tool died from SIGINT or SIGTERM, and `check run`
+  treats a context cancelled by the time the checks return as an
+  interruption. In 160 stress runs (GOMAXPROCS 1 and 4, signal to Salus or
+  to the tool first) every run exited 3 without a report.
+- **Windows.** Only the tool itself is killed on timeout; processes it
+  started can outlive it. `WaitDelay` still bounds how long Salus waits for
+  them. A job object would be needed to kill the tree.
+- **Fatal runtime errors** (out of memory, concurrent map writes) cannot be
+  recovered and still exit 2. The 8 MiB output limit removes the one known
+  path to unbounded memory.
 
 ### GitHub Actions maintenance (observed 2026-09-27)
 - **Node 20 deprecation sources.** Run annotations on `78db94e` and v1.0.1
@@ -417,7 +443,7 @@ as strong evidence, and treat GitHub Actions results as authoritative.
 
 ## Open questions and decisions
 
-Decisions recorded 2026-09-27 from the maintainer (Q-012 to Q-014 on 2026-10-03).
+Decisions recorded 2026-09-27 from the maintainer (Q-012 to Q-014 on 2026-10-03, Q-015 to Q-018 on 2026-10-04).
 
 | ID | Question | Why it matters | Decision |
 |---|---|---|---|
@@ -435,3 +461,7 @@ Decisions recorded 2026-09-27 from the maintainer (Q-012 to Q-014 on 2026-10-03)
 | Q-012 | Should the M6 checks (`disk-inodes`, `systemd-failed`, `time-sync`, `kubernetes-pods`, `cert-expiry`) run in a plain `check run`? | Adding checks to the default run can raise exit codes on hosts that passed before. | **Yes** (2026-10-03). They join the default run; `cert-expiry` runs only when `--cert` is given. The changes are listed under "Upgrading from 1.0.2" (P6-5 to P6-9). |
 | Q-013 | Should `sshd-password-auth` warn only on an explicit `PasswordAuthentication yes`, or on the effective value, which defaults to yes when unset? | The effective value catches stock installs, so more hosts warn. | **Effective value** (2026-10-03). An unset keyword counts as yes, as in OpenSSH (P6-10). |
 | Q-014 | What severity for pods in CrashLoopBackOff or not Ready, and for nodes reporting Memory, Disk, or PID pressure? | Severity decides exit codes and alerting. | **WARN** (2026-10-03), matching the P3-2 decision for unhealthy containers. FAIL stays reserved for an unreachable cluster or no Ready node (P6-9). |
+| Q-015 | When `check run` has written its report but saving the run fails, which exit code? | Scripts and Nagios read the code; the report is the monitoring signal. | **Exit 3** (2026-10-04), as before, but the report is now written first (P7-2). Nagios then shows the check state with UNKNOWN. |
+| Q-016 | `check run --json` is a bare array without version or metadata. Keep it, add an envelope format, or switch to an envelope? | An envelope later is a breaking change for consumers. | **Keep it and document stability** (2026-10-04): fields are only added, never renamed or removed (P7-8). |
+| Q-017 | What status for a check stopped by `--check-timeout` or `--run-timeout`? | Severity decides exit codes and alerting. | **FAIL** (2026-10-04): a hang usually means a hung mount, daemon, or tool, which matches "FAIL when unreachable" (P7-4). |
+| Q-018 | What should `check run` do on SIGINT or SIGTERM? | systemd and terminals stop runs this way; the exit code and the saved history must stay truthful. | **Stop, save nothing, exit 3** (2026-10-04): kill running tools, write no report, record no run (P7-5). |

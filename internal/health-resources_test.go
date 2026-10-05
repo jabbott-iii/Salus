@@ -133,7 +133,7 @@ func TestResourceChecksReadThisHost(t *testing.T) {
 	if err != nil || uptime <= 0 {
 		t.Errorf("readSystemUptime() = %v, %v, want a positive uptime", uptime, err)
 	}
-	got := checkServiceUptime(CheckOptions{})
+	got := checkServiceUptime(t.Context(), CheckOptions{})
 	if got.Status != StatusPass || got.Value == nil || got.Unit != unitSeconds {
 		t.Errorf("host uptime = %+v, want PASS with seconds", got)
 	}

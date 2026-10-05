@@ -33,6 +33,10 @@ type meminfo struct {
 	availableKB uint64
 	swapTotalKB uint64
 	swapFreeKB  uint64
+
+	// missing names the fields the usage calculation needs (MemTotal,
+	// MemAvailable) that were absent or malformed; empty when both parsed.
+	missing string
 }
 
 func (m meminfo) swapPercent() float64 {
@@ -52,7 +56,8 @@ func readMeminfo() (meminfo, error) {
 }
 
 // parseMeminfo extracts the fields used by the memory check from /proc/meminfo
-// contents. Missing or malformed lines leave the corresponding field at zero.
+// contents. Missing or malformed lines leave the corresponding field at zero;
+// missing names the absent fields that the usage calculation needs.
 func parseMeminfo(data []byte) meminfo {
 	values := map[string]uint64{}
 	for _, line := range strings.Split(string(data), "\n") {
@@ -68,11 +73,18 @@ func parseMeminfo(data []byte) meminfo {
 		values[name] = v
 	}
 
+	var missing []string
+	for _, name := range []string{"MemTotal", "MemAvailable"} {
+		if _, ok := values[name]; !ok {
+			missing = append(missing, name)
+		}
+	}
 	return meminfo{
 		totalKB:     values["MemTotal"],
 		availableKB: values["MemAvailable"],
 		swapTotalKB: values["SwapTotal"],
 		swapFreeKB:  values["SwapFree"],
+		missing:     strings.Join(missing, " and "),
 	}
 }
 
@@ -82,12 +94,22 @@ func checkMemory(opts CheckOptions) CheckOutcome {
 	if err != nil {
 		return CheckOutcome{Key: keyMemory, Status: StatusFail, Message: err.Error(), Duration: time.Since(start)}
 	}
+	return memoryOutcome(info, opts, start)
+}
 
-	usedPercent := 0.0
-	if info.totalKB > 0 {
-		usedPercent = (1 - float64(info.availableKB)/float64(info.totalKB)) * 100
+// memoryOutcome classifies parsed /proc/meminfo. Usage needs MemTotal and
+// MemAvailable (which kernels before 3.14 lack). Without them, or with a zero
+// total, usage is unknown: that is a WARN with no value, not a made-up 0%
+// (PASS) or 100% (FAIL).
+func memoryOutcome(info meminfo, opts CheckOptions, start time.Time) CheckOutcome {
+	if info.missing != "" {
+		return CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory usage unknown: /proc/meminfo has no " + info.missing, Duration: time.Since(start)}
+	}
+	if info.totalKB == 0 {
+		return CheckOutcome{Key: keyMemory, Status: StatusWarn, Message: "memory usage unknown: /proc/meminfo reports MemTotal 0", Duration: time.Since(start)}
 	}
 
+	usedPercent := (1 - float64(info.availableKB)/float64(info.totalKB)) * 100
 	status, msg := thresholdStatus(usedPercent, opts.memWarnPercent(), opts.memFailPercent(),
 		fmt.Sprintf("memory %.1f%% used, swap %.1f%% used", usedPercent, info.swapPercent()))
 

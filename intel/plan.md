@@ -4,7 +4,8 @@ Active implementation plans and follow-on work. Architecture rules are in
 [`maint.md`](maint.md). Security items (`SEC-*`) are defined in
 [`cybersec.md`](cybersec.md), and open questions (`Q-*`) in [`notes.md`](notes.md).
 
-Last reviewed: 2026-10-04, against local `main` at `be1ff43` plus the
+Last reviewed: 2026-10-04, against local `main` at `b16129f` plus the
+uncommitted M7 changes (Phase 7). Before that, against `be1ff43` plus the
 uncommitted P4-4 changes. `be1ff43` adds P4-3 and P4-5; `2254473` added the
 placeholder `SECURITY.md`; `03964ff` carries M5, M6, and P3-7; v1.0.2 is at
 `08b2faa`. Decisions on Q-001 to Q-011 are recorded in `notes.md`; the P3-2 and
@@ -255,6 +256,53 @@ file, custom command checks, and notifications. Not planned: an HTTP endpoint
 (Q-001: CLI only) and client-go. CI smoke steps keep their shell exit-code
 logic; switching them to `--fail-on` is optional follow-up and changes CI.
 
+## Phase 7: Unattended-run hardening (M7)
+
+From the 2026-10-04 production-readiness review, which reproduced P7-1 to P7-3
+on `b16129f`. Requested by the maintainer the same day, with decisions Q-015
+to Q-018 in `notes.md`. Implemented and validated locally on 2026-10-04 in the
+working tree (uncommitted). No new module dependency, no schema column change,
+and no change to the output formats. Behavior changes are listed in the README
+"Upgrading from 1.0.2" section, so they ship in v1.1.0.
+
+| ID | Work | Acceptance criteria | Status |
+|---|---|---|---|
+| P7-1 | Concurrent first open. Before: 8 `check run` processes on a new database failed with exit 3 ("table already exists", "UNIQUE constraint failed") in 4 of 5 rounds. Now: connection defaults `_busy_timeout=5000` and `_txlock=immediate` unless `SALUS_DB_PATH` sets them; migration, seeding, and `PRAGMA user_version = schemaVersion` (1) in one immediate transaction; a current database is only read; a read-only database that is current but unversioned falls back to the old path; a newer version (downgrade) is used as it is; seeding is `firstOrInsert` (lookup, `INSERT ... ON CONFLICT DO NOTHING`, re-read). | `TestOpenDatabaseConcurrentFirstOpen` (fails without the transaction), `TestSeedCatalogToleratesConcurrentInsert` (fails without `ON CONFLICT`), schema-version and read-only tests (run as a non-root user), `TestSchemaMatchesSchemaVersion`. Binary: 12 concurrent processes, 10 rounds on new databases and 5 on databases written by `b16129f`, all exit 0; `b16129f` still opens a version-1 database. | Awaiting CI |
+| P7-2 | Report before save (Q-015). `check run` writes the report (stdout or `--output`) before `RecordScan`; a save failure still exits 3, and the error says the report was written. | `TestCheckRunWritesReportWhenSaveFails` (stdout and `--output`). Binary: with the database locked past the busy timeout, the `--output` file is written and the exit code is 3 (before: no file). | Awaiting CI |
+| P7-3 | Hard command timeout (SEC-010): `runExternal` with `WaitDelay` 1s, process-group kill on Unix, 8 MiB output limit, `<tool> timed out after <d>` messages, and a short wait for the run's own cancellation when a tool died from SIGINT or SIGTERM. | See SEC-010. Binary: fake `kubectl` with a background child and `--timeout 1s` ends after 1.01s (before: 60s) and leaves no process. | Awaiting CI |
+| P7-4 | Per-check and whole-run limits (Q-017): `checkFunc` takes a `context.Context` (checks without tools use `withoutContext`); `--check-timeout` (default 10 × `--timeout`) and `--run-timeout` (default none); each check runs in its own goroutine; a check past a limit, or not started because of `--run-timeout`, is FAIL naming the target. | `TestRunChecksStopsCheckAtItsTimeLimit`, `TestRunChecksRunTimeLimit`, `TestCheckTimeoutDefault` (including overflow), flag mapping and validation tests. | Awaiting CI |
+| P7-5 | Signals (Q-018): SIGINT and SIGTERM while checks run stop them and their tools, write no report, save nothing, and exit 3; a second signal ends the process; inherited-ignored signals stay ignored. | `TestCheckRunInterruptedWritesAndSavesNothing`, `TestCheckRunStopsOnSIGTERM`, `TestStopSignalContextKeepsIgnoredSignalIgnored`, `TestRunChecksReturnsCancellationCause`. Binary: SIGTERM, SIGTERM to Salus and its tool together (as systemd does), and SIGINT to the process group, 30 to 40 runs each with GOMAXPROCS 1 and 4: always exit 3, no report, no leftover process. | Awaiting CI |
+| P7-6 | Panics exit 3, not 2: `main.runWith` recovers; a panic in a check goroutine is raised again on the caller. | `TestRunReportsPanicAsOperationalError`, `TestRunChecksRaisesCheckPanic`. Runtime fatal errors (for example out of memory) still exit 2. | Awaiting CI |
+| P7-7 | Linux `memory`: missing `MemTotal` or `MemAvailable`, or a zero total, is WARN "memory usage unknown" with no value (before: 0% PASS or 100% FAIL). | `TestMemoryOutcome`. | Awaiting CI |
+| P7-8 | Document the `check run --json` stability promise (Q-016) in the README and `maint.md` section 3. | Documentation only. | Awaiting merge |
+
+### M7 validation (2026-10-04, before commit)
+
+Run in a cloud workspace with Go 1.26.8 built from source, modules resolved
+from their upstream GitHub repositories at the `go.mod` versions (the Go
+module proxy was not reachable), as root and, for the permission tests, as a
+non-root user:
+
+- `gofmt -s -l .` lists nothing; `go vet ./...` passes for linux, and with
+  `GOOS=darwin` and `GOOS=windows` (CGO off); the test packages compile for
+  both.
+- `go test ./...` and `go test -race ./...` pass, repeatedly. The internal
+  package takes about 7s instead of about 1.5s, because the time-limit tests
+  wait for abandoned checks (`commandWaitDelay` + 100ms each) and real
+  processes.
+- Mutation checks: removing the migration transaction, `ON CONFLICT DO
+  NOTHING`, the process-group kill, or `WaitDelay` each makes a new test fail.
+- An independent review (no High findings) led to: waiting briefly for an
+  abandoned check so its tools are killed before Salus exits, treating a
+  signal that arrives as the checks finish as an interruption, the stop-signal
+  grace for tools that die from the same signal, keeping inherited-ignored
+  signals ignored, the `--check-timeout` overflow guard, a single error on the
+  read-only fallback, the `wantSchema` test, and the documentation.
+
+Not run: golangci-lint (no compatible build available), gosec, CodeQL,
+govulncheck, the Docker image build, and the macOS and Windows tests. CI
+covers them after the push.
+
 ## Recommended sequence
 
 1. **M1, green pipeline:** Done. CI, Docker, and Security are green on
@@ -343,3 +391,10 @@ logic; switching them to `--fail-on` is optional follow-up and changes CI.
    (its upgrade notes are in the README "Upgrading from 1.0.2" section).
    CI #80 ran the new code on macOS and Windows for the first time and
    passed.
+9. **M7, unattended-run hardening:** implemented 2026-10-04 (uncommitted;
+   Phase 7). Maintainer steps: review and commit the working tree, let CI run
+   on ubuntu, macOS, and Windows (the first run of the macOS and Windows
+   paths of P7-3 to P7-5), then close SEC-010 and mark P7 Done. M7 changes
+   behavior (see the README "Upgrading from 1.0.2" section), so it belongs in
+   v1.1.0 together with M5, M6, and P3-7; tag after it, before 2026-10-19 if
+   possible (step 7).

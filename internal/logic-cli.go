@@ -17,15 +17,18 @@ limitations under the License.
 package internal
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"math"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -118,7 +121,7 @@ func newCheckRunCmd(openDB DatabaseOpener) *cobra.Command {
 
 // newCheckRunCmdWith builds check run around the function that runs the
 // checks, so tests can inspect the options produced by the flags.
-func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOptions) ([]CheckOutcome, error)) *cobra.Command {
+func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func(context.Context, []string, CheckOptions) ([]CheckOutcome, error)) *cobra.Command {
 	var (
 		only       []string
 		opts       CheckOptions
@@ -185,18 +188,32 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOpt
 				}
 			}
 
+			// SIGINT or SIGTERM while checks run stops them, including the
+			// external tools they started, and ends the run with exit 3: no
+			// report is written and nothing is saved. A second signal stops
+			// Salus at once (the default handling is restored after the
+			// first). Once the checks have finished, the report and the save
+			// complete before the signal takes effect.
+			ctx, stop := stopSignalContext(cmd.Context())
+			defer stop()
+			context.AfterFunc(ctx, stop)
+
 			startedAt := time.Now()
-			outcomes, err := runChecks(only, opts)
+			outcomes, err := runChecks(ctx, only, opts)
+			if err == nil && ctx.Err() != nil {
+				// The signal can also reach the tools (systemd signals the
+				// whole control group) and end them before the context is
+				// cancelled; their checks then report the signal as a
+				// failure. The run was still interrupted.
+				err = context.Cause(ctx)
+			}
 			if err != nil {
+				if ctx.Err() != nil {
+					return fmt.Errorf("interrupted (%w); no report was written and the run was not saved", context.Cause(ctx))
+				}
 				return err
 			}
 			finishedAt := time.Now()
-
-			if !noSave {
-				if _, err := RecordScan(db, startedAt, outcomes); err != nil {
-					return fmt.Errorf("record scan: %w", err)
-				}
-			}
 
 			code := exitCodeWithFailOn(WorstStatus(outcomes), failOn)
 			report := runReport{outcomes: outcomes, startedAt: startedAt, finishedAt: finishedAt, exitCode: code, failOn: failOn, failOnly: failOnly}
@@ -216,8 +233,14 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOpt
 				}
 			}
 
-			// Pruning is housekeeping; it runs after the report, so a failure
-			// (for example a busy database) still leaves the report written.
+			// Saving and pruning run after the report, so a database failure
+			// (for example a lock held past the busy timeout, or a full disk)
+			// still leaves the report written. Either failure exits 3.
+			if !noSave {
+				if _, err := RecordScan(db, startedAt, outcomes); err != nil {
+					return fmt.Errorf("record scan: %w (the report was written; this run is not in the history)", err)
+				}
+			}
 			if retainAge > 0 {
 				// The cutoff never passes this run's start, so the run just
 				// recorded is kept even with a tiny age.
@@ -257,6 +280,8 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOpt
 	cmd.Flags().StringArrayVar(&opts.CertPaths, "cert", nil, "certificate file (PEM or DER) for the cert-expiry check; repeat for several")
 	cmd.Flags().IntVar(&opts.CertWarnDays, "cert-warn-days", defaultCertWarnDays, "days before expiry at which cert-expiry reports WARN")
 	cmd.Flags().DurationVar(&opts.CommandTimeout, "timeout", defaultCommandTimeout, "time limit for each external command (docker, kubectl, systemctl, timedatectl)")
+	cmd.Flags().DurationVar(&opts.CheckTimeout, "check-timeout", 0, "time limit for each check and target, after which it reports FAIL (default 10 times --timeout)")
+	cmd.Flags().DurationVar(&opts.RunTimeout, "run-timeout", 0, "time limit for the whole run; checks it stops or never starts report FAIL (default no limit)")
 	cmd.Flags().StringVar(&format, "format", formatText, "report format: "+strings.Join(reportFormats, ", "))
 	cmd.Flags().BoolVar(&jsonOutput, "json", false, "output results as JSON (same as --format json)")
 	cmd.Flags().StringVar(&outputPath, "output", "", "write the report to this file, replacing it atomically, instead of standard output")
@@ -267,6 +292,23 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func([]string, CheckOpt
 	cmd.Flags().StringVar(&retain, "retain", "", "after saving this run, delete saved runs older than this age, such as 30d or 12h")
 
 	return cmd
+}
+
+// stopSignalContext returns a context that SIGINT or SIGTERM cancels. A
+// signal the process inherited as ignored, such as SIGINT for a background
+// job started by a non-interactive shell, stays ignored.
+func stopSignalContext(parent context.Context) (context.Context, context.CancelFunc) {
+	var signals []os.Signal
+	for _, sig := range []os.Signal{os.Interrupt, syscall.SIGTERM} {
+		if !signal.Ignored(sig) {
+			signals = append(signals, sig)
+		}
+	}
+	if len(signals) == 0 {
+		// signal.NotifyContext with no signals would catch every signal.
+		return context.WithCancel(parent)
+	}
+	return signal.NotifyContext(parent, signals...)
 }
 
 // checkOutputPath rejects an --output path that writeFileAtomic cannot
@@ -345,6 +387,16 @@ func validateLimits(opts CheckOptions) error {
 
 	if opts.CommandTimeout <= 0 {
 		return fmt.Errorf("invalid --timeout value %s: must be greater than 0", opts.CommandTimeout)
+	}
+	// Zero means the default for both limits.
+	if opts.CheckTimeout < 0 {
+		return fmt.Errorf("invalid --check-timeout value %s: must not be negative", opts.CheckTimeout)
+	}
+	if opts.CheckTimeout > 0 && opts.CheckTimeout < opts.CommandTimeout {
+		return fmt.Errorf("--check-timeout (%s) must not be less than --timeout (%s)", opts.CheckTimeout, opts.CommandTimeout)
+	}
+	if opts.RunTimeout < 0 {
+		return fmt.Errorf("invalid --run-timeout value %s: must not be negative", opts.RunTimeout)
 	}
 	if opts.CertWarnDays <= 0 {
 		return fmt.Errorf("invalid --cert-warn-days value %d: must be greater than 0", opts.CertWarnDays)

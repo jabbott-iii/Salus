@@ -783,3 +783,53 @@ reconstructed from commit messages and diffs, not first-hand records.
   - Not verified: the private vulnerability reporting setting itself, because
     this session cannot reach the GitHub API for the repository.
   - Uncommitted at the time of writing.
+
+## 2026-10-04: M7 — unattended-run hardening (uncommitted)
+
+- Change:
+  - Database (P7-1): concurrent first opens no longer fail. Connection
+    defaults `_busy_timeout=5000` and `_txlock=immediate`; migration,
+    seeding, and the new schema version (`PRAGMA user_version`, now 1) run
+    in one immediate transaction; a current database is only read; seeding
+    tolerates concurrent inserts (`ON CONFLICT DO NOTHING`).
+  - `check run` writes the report before saving the run; a save failure
+    still exits 3 (P7-2, Q-015).
+  - External commands (P7-3, SEC-010): `--timeout` now also ends processes a
+    tool started (process-group kill on Unix, `WaitDelay` everywhere), output
+    is limited to 8 MiB, and timeouts are reported as `<tool> timed out after
+    <d>`.
+  - New `--check-timeout` (default 10 × `--timeout`) and `--run-timeout`
+    (default none); a check stopped by either is FAIL (P7-4, Q-017). Checks
+    now take a `context.Context`.
+  - SIGINT and SIGTERM during `check run` exit 3 without a report or a saved
+    run (P7-5, Q-018); panics exit 3 instead of 2 (P7-6); Linux `memory`
+    reports WARN when `/proc/meminfo` lacks the needed fields (P7-7).
+  - The `--json` stability promise is documented (P7-8, Q-016).
+  - Documentation: README (flags, check table, JSON stability, exit codes,
+    Nagios, configuration, upgrade notes), `maint.md` (sections 2, 3, 4, 6),
+    `map.md`, `cybersec.md` (SEC-010, requirement 1, controls), `plan.md`
+    (Phase 7, sequence step 9), and `notes.md` (Q-015 to Q-018, M7 notes).
+- Files:
+  - New: `internal/health-exec.go`, `internal/health-exec_unix.go`,
+    `internal/health-exec_other.go`, and tests
+    `internal/health-exec_test.go`, `internal/health-exec_unix_test.go`,
+    `internal/logic-cli_unix_test.go`.
+  - Changed: `main.go`, `main_test.go`, `internal/database.go`,
+    `internal/seed.go`, `internal/health.go`, `internal/health-systemd.go`,
+    `internal/health-pods.go`, `internal/health-resources_linux.go`,
+    `internal/logic-cli.go`, their tests (`database_test.go`,
+    `checks_test.go`, `health_test.go`, `health-pods_test.go`,
+    `health-systemd_test.go`, `health-resources_test.go`,
+    `health-resources_linux_test.go`, `logic-cli_test.go`), `README.md`, and
+    `intel/` documents.
+- Reason / reference: the 2026-10-04 production-readiness review, which
+  reproduced the concurrent-open failure, the lost report on a save failure,
+  and the 60-second run with `--timeout 1s`; the maintainer asked for these
+  fixes and decided Q-015 to Q-018.
+  - Validated on Linux (tests, race, non-root run, mutation checks, binary
+    reproductions, signal stress runs) and by vet and test compilation for
+    darwin and windows. See `plan.md` "M7 validation".
+  - An independent review found no High issues; its Medium and Low findings
+    are fixed (see `plan.md`).
+  - Uncommitted at the time of writing.
+

@@ -16,7 +16,12 @@ limitations under the License.
 
 package internal
 
-import "fmt"
+import (
+	"fmt"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+)
 
 // defaultCategory names the FeatureCategory rows seeded on startup.
 type defaultCategory struct {
@@ -58,12 +63,17 @@ var defaultFeatures = []defaultFeature{
 
 // EnsureDefaultFeatures seeds the built-in feature catalog if it is not already present.
 func EnsureDefaultFeatures(db *Database) error {
-	conn := db.Conn()
+	return seedCatalog(db.Conn())
+}
 
+// seedCatalog inserts the categories and features of the built-in catalog
+// that are missing. Existing rows are never updated (intel/maint.md section
+// 4), and a catalog that is already complete is only read.
+func seedCatalog(conn *gorm.DB) error {
 	categoryIDs := make(map[string]uint, len(defaultCategories))
 	for _, cat := range defaultCategories {
 		record := FeatureCategory{Name: cat.Name, Description: cat.Description}
-		if err := conn.Where(FeatureCategory{Name: cat.Name}).FirstOrCreate(&record).Error; err != nil {
+		if err := firstOrInsert(conn, FeatureCategory{Name: cat.Name}, &record); err != nil {
 			return fmt.Errorf("seed category %q: %w", cat.Name, err)
 		}
 		categoryIDs[cat.Name] = record.ID
@@ -81,10 +91,42 @@ func EnsureDefaultFeatures(db *Database) error {
 			Name:        feat.Name,
 			Description: feat.Description,
 		}
-		if err := conn.Where(Feature{Key: feat.Key}).FirstOrCreate(&record).Error; err != nil {
+		if err := firstOrInsert(conn, Feature{Key: feat.Key}, &record); err != nil {
 			return fmt.Errorf("seed feature %q: %w", feat.Key, err)
 		}
 	}
 
 	return nil
+}
+
+// firstOrInsert loads the row matching where into record, inserting record
+// first when no row matches. The insert does nothing on a uniqueness
+// conflict, so a row that another connection added in the meantime is read
+// back instead of failing the open. When the row exists, nothing is written.
+func firstOrInsert[T any](conn *gorm.DB, where T, record *T) error {
+	found := conn.Where(where).Limit(1).Find(record)
+	if found.Error != nil {
+		return found.Error
+	}
+	if found.RowsAffected > 0 {
+		return nil
+	}
+	if err := conn.Clauses(clause.OnConflict{DoNothing: true}).Create(record).Error; err != nil {
+		return err
+	}
+	return conn.Where(where).First(record).Error
+}
+
+// catalogComplete reports whether every feature of the built-in catalog is
+// stored. It only reads, so an up-to-date database can be opened read-only.
+func catalogComplete(conn *gorm.DB) (bool, error) {
+	keys := make([]string, 0, len(defaultFeatures))
+	for _, feat := range defaultFeatures {
+		keys = append(keys, feat.Key)
+	}
+	var stored int64
+	if err := conn.Model(&Feature{}).Where("key IN ?", keys).Count(&stored).Error; err != nil {
+		return false, fmt.Errorf("check feature catalog: %w", err)
+	}
+	return stored == int64(len(keys)), nil
 }
