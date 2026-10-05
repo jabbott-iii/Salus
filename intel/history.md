@@ -975,3 +975,28 @@ reconstructed from commit messages and diffs, not first-hand records.
   `intel/plan.md`, `CONTRIBUTING.md`, `.golangci.yml`, `intel/history.md`.
 - Reason / reference: maintainer request on 2026-10-05 to clean up the files
   related to the rename.
+
+## 2026-10-05: Image attestation kept with GitHub so GHCR shows `docker pull …:latest` (P8-2, uncommitted)
+- Change:
+  - `cd.yml` `image-publish`: the `Attest image provenance` step no longer
+    sets `push-to-registry: true` (and drops `create-storage-record: false`,
+    which applies only with it). The attestation is still signed and stored
+    with GitHub; it is no longer copied to ghcr.io.
+  - Why: the registry copy was a `sha256-<digest>` package version pushed
+    after the image, so after v1.1.0 the package page's install command read
+    `docker pull ghcr.io/jabbott-iii/salus:sha256-1e0a09…` instead of
+    `:latest`. The Munus package, which attests the same way without the
+    registry copy, shows `docker pull ghcr.io/jabbott-iii/munus:latest`.
+  - Unchanged: job permissions, image tags (`X.Y.Z`, `X.Y`, `latest`,
+    `X.Y.Z-<arch>`), and the README `gh attestation verify oci://...`
+    command, which reads attestations from GitHub by default.
+- Files: `.github/workflows/cd.yml`, `intel/maint.md`, `intel/map.md`,
+  `intel/plan.md` (P8-2), `intel/history.md`.
+- Reason / reference: maintainer request on 2026-10-05 for a package page
+  like https://github.com/jabbott-iii/Munus/pkgs/container/munus.
+  - Validation: actionlint 1.7.12 with shellcheck 0.11.0 passes on the
+    changed `cd.yml` (as before the change); the `actions/attest` v4.2.2
+    source confirms the attestation is stored with GitHub whether or not
+    `push-to-registry` is set.
+  - Not run: the `image-publish` job, which runs only for a tag. The
+    existing `sha256-1e0a09…` version stays on ghcr.io until deleted.

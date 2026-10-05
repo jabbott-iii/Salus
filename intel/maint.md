@@ -579,7 +579,12 @@ authorization plus README and `history.md` updates:
   `release`) pushes `ghcr.io/<owner>/salus:<X.Y.Z>-<arch>`, combines them with
   `docker buildx imagetools create` into `<X.Y.Z>`, plus `<X.Y>` and `latest`
   for tags without a pre-release suffix, and attests the multi-arch digest
-  with `push-to-registry`. Image tags drop the `v`. The `image` job rejects a
+  without `push-to-registry` (P8-2): a registry copy of the attestation
+  becomes a `sha256-<digest>` package version published after the image,
+  and GHCR's `docker pull` command names the newest version's tag, so it
+  would show that copy instead of `latest`. `gh attestation verify oci://`
+  reads the attestation from GitHub. Image tags drop the `v`. The `image`
+  job rejects a
   tag that is not `vMAJOR.MINOR.PATCH[-PRERELEASE]` (build metadata such as
   `+meta`, which the Makefile accepts, is not a valid image tag), and
   `release` needs `image`, so such a tag, or an image that fails its smoke
@@ -612,8 +617,8 @@ authorization plus README and `history.md` updates:
     `security.yml` can write (`security-events: write`, for SARIF upload).
   - `artifact-metadata: write` is deliberately absent. `actions/attest`
     creates storage records only with `push-to-registry`, and only for
-    organization-owned repositories (checked in the v4.2.2 source), so
-    `image-publish` sets `create-storage-record: false`.
+    organization-owned repositories (checked in the v4.2.2 source), and no
+    CD job uses `push-to-registry` (P8-2).
 - **Runner labels (Q-011):**
   - CD builds Linux on `ubuntu-24.04` (amd64) and `ubuntu-24.04-arm` (arm64),
     and runs the release job on `ubuntu-24.04`, so release builds do not move
@@ -639,7 +644,7 @@ authorization plus README and `history.md` updates:
   so PR checks do not cover them. Test them with a `workflow_dispatch` CD run,
   which attests the archives. The `Create GitHub Release` and
   `Publish pre-release` steps and the whole `image-publish` job (registry
-  push and the image attestation with `push-to-registry`) run only for tags,
+  push and the image attestation) run only for tags,
   so only a tag exercises them; use a pre-release tag (`vX.Y.Z-rc.1`) before
   a stable one. Read `softprops/action-gh-release`'s release notes before
   bumping it.

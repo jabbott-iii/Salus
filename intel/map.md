@@ -100,7 +100,8 @@ Salus/
 │                               + provenance attestation → release job: GitHub Release (tags only;
 │                               pre-release for -suffix tags); image matrix: native amd64/arm64
 │                               Docker builds + smoke tests → image-publish (tags only): ghcr.io
-│                               push, multi-arch tags, provenance attestation (P8-1);
+│                               push, multi-arch tags, provenance attestation kept with GitHub
+│                               (P8-1, P8-2);
 │                               Linux builds and release jobs pinned to Ubuntu 24.04
 ├── .devcontainer/devcontainer.json   Ubuntu base + Go, Docker-outside-of-Docker, Neovim
 ├── Dockerfile                  Multi-stage, digest-pinned: golang:1.26-alpine3.24 → alpine:3.24, runs as UID 10001;

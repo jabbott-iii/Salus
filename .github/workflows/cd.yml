@@ -406,16 +406,17 @@ jobs:
           echo "digest=${digest}" >> "$GITHUB_OUTPUT"
           docker buildx imagetools inspect "${IMAGE}:${VERSION}"
 
-      # Signs SLSA build provenance for the multi-arch image and stores it in
-      # the registry next to the image. Storage records exist only for
-      # organization-owned repositories, so none is requested.
+      # Signs SLSA build provenance for the multi-arch image. The attestation
+      # is stored with GitHub, where gh attestation verify oci://... finds it
+      # (README), and is not pushed to the registry: there it would become a
+      # sha256-<digest> package version, published after the image, and GHCR
+      # would show that tag instead of latest in the package's docker pull
+      # command (intel/plan.md P8-2).
       - name: Attest image provenance
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-name: ${{ steps.names.outputs.image }}
           subject-digest: ${{ steps.push.outputs.digest }}
-          push-to-registry: true
-          create-storage-record: false
 
       - name: Log out of GitHub Container Registry
         if: always()
