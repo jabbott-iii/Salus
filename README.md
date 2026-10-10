@@ -1,3 +1,5 @@
+<img width="1009" height="476" alt="demo" src="https://github.com/user-attachments/assets/eb426116-3d0f-4cdc-ae77-b781c7dd662b" />
+
 # Salus
 
 Salus is an environment health checker CLI. It verifies disk space and inodes,
