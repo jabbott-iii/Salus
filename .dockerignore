@@ -6,6 +6,9 @@
 .vscode
 .devcontainer
 .junie
+.claude
+CLAUDE.md
+CLAUDE.local.md
 intel
 **/.env
 **/.env.*
