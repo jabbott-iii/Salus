@@ -40,7 +40,10 @@ paths:
 - Per-OS files use the `_linux.go`, `_darwin.go`, `_windows.go` suffixes and
   `_other.go` with `//go:build !linux && !darwin && !windows`. Process
   handling splits on `unix` / `!unix` (`health-exec_unix.go`,
-  `health-exec_other.go`). Every platform must define every function the
+  `health-exec_other.go`), WSL drvfs detection on `linux` / `!linux`
+  (`health-mounts_linux.go`, `health-mounts_other.go`), and `--output` group
+  handling on `!windows` / `windows` (`report-files_unix.go`,
+  `report-files_windows.go`). Every platform must define every function the
   check registry references.
 - Unexported helpers used only from platform-specific files carry the same
   build constraint, or `unused` fails the lint on the other operating

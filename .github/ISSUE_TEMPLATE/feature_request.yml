@@ -42,7 +42,7 @@ body:
     id: compatibility
     attributes:
       label: Compatibility
-      description: Does this change a public contract (command names and flags, exit codes, check keys, JSON or report formats, environment variables, or the database schema; see intel/maint.md section 3)? If so, how would existing users be affected?
+      description: Does this change a public contract (command names and flags, exit codes, check keys, misconfig rule IDs, JSON or report formats, environment variables, the database schema, or exported pkg identifiers; see the Public contracts section of CLAUDE.md)? If so, how would existing users be affected?
   - type: checkboxes
     id: contribution
     attributes:

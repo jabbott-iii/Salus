@@ -23,7 +23,7 @@ Closes #
 
 - [ ] Tests cover the change.
 - [ ] Documentation is updated where the change affects it (see CONTRIBUTING.md, "Documentation").
-- [ ] Public contracts (intel/maint.md section 3) are unchanged, or the change was approved on the issue.
+- [ ] Public contracts (see CLAUDE.md, "Public contracts") are unchanged, or the change was approved on the issue.
 - [ ] No secrets, credentials, tokens, local databases (`*.db`), or `.env` files are included.
 
 ## Security notes
