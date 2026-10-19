@@ -3,9 +3,10 @@
 Thanks for your interest in improving Salus. This guide covers how to propose
 changes, set up a development environment, validate your work, and open a pull
 request. Architecture and maintainability rules are defined in
-[`intel/maint.md`](intel/maint.md), which takes precedence if this guide and
-that document disagree. Go-specific rules are in
-[`intel/golang.md`](intel/golang.md).
+[`CLAUDE.md`](CLAUDE.md) and the path-scoped rules in
+[`.claude/rules/`](.claude/rules/), which take precedence if this guide and
+those files disagree. Go-specific rules are in
+[`.claude/rules/go.md`](.claude/rules/go.md).
 
 Please follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
@@ -98,8 +99,11 @@ request.
   PASS, `1` WARN, `2` FAIL, `3` operational error), check keys and their
   order, `misconfig` rule identifiers, JSON output fields, the Nagios,
   Prometheus, and JUnit output layouts (including metric names and labels),
-  `SALUS_DB_PATH`, `SALUS_SSHD_CONFIG`, and the database schema are public
-  contracts. Do not change them without explicit approval on the issue.
+  `SALUS_DB_PATH`, `SALUS_SSHD_CONFIG`, the database schema, and the exported
+  identifiers of package `pkg`, which other projects can import, are public
+  contracts. Do not change them without explicit approval on the issue. See
+  [Public contracts](CLAUDE.md#public-contracts) in `CLAUDE.md` for the full
+  list.
 - **Errors.** Wrap errors with context (`fmt.Errorf("...: %w", err)`), and
   check and return every write to a command's output writer.
 - **External commands.** Run tools only through `opts.command(ctx, ...)`, which
@@ -110,7 +114,7 @@ request.
   Explain any new dependency in the issue, and update `NOTICE` when the module
   graph changes.
 - **New checks** follow the checklist in
-  [`intel/maint.md`](intel/maint.md#adding-a-new-check-checklist): key
+  [`.claude/rules/checks.md`](.claude/rules/checks.md#adding-a-check): key
   constant appended to `AllCheckKeys`, registry entry (plus a `checkTargets`
   entry if it runs once per target), seeded catalog entry, tests, and
   documentation.
@@ -131,17 +135,23 @@ request.
 
 Update documentation in the same pull request when your change affects it:
 
-- `README.md` for user-visible commands, flags, behavior, or installation.
-- `intel/map.md` when files, components, dependencies, or data flows change.
-- `intel/cybersec.md` when you fix a security issue that is already public.
-  Report an undisclosed vulnerability privately first (see `SECURITY.md`); it
-  is recorded in `cybersec.md` when its advisory is published. Never delete
-  existing items.
-- `intel/history.md` for significant changes. Append only.
-- `intel/plan.md` and `intel/notes.md` when work items or open questions
-  change.
+- `README.md` for user-visible commands, flags, behavior, output, platforms,
+  installation, testing commands, or the project structure. A change that can
+  raise the exit code on a host that passed before, or that changes output
+  scripts parse, also needs an "Upgrading from" note.
+- `CONTRIBUTING.md` when the toolchain, validation commands, workflow, or
+  conventions change.
+- `SECURITY.md` when the reporting or release verification process changes.
+  Never describe an undisclosed vulnerability in a public file; report it
+  privately first (see `SECURITY.md`).
+- `NOTICE` for any `go.mod` change.
+- `.github/pull_request_template.md` and `.github/ISSUE_TEMPLATE/` when the
+  validation steps or the list of public contracts change.
+- `CLAUDE.md` and `.claude/` when a maintainer rule proves wrong or a
+  convention changes.
 
-See `AGENTS.md` for the full documentation rules.
+See the Documentation section of `CLAUDE.md` and `.claude/rules/docs.md` for
+the full documentation rules.
 
 ## Pull request expectations
 
@@ -161,8 +171,8 @@ points:
 Do not report vulnerabilities in public issues or pull requests. Report them
 privately through GitHub's private vulnerability reporting, as described in
 [`SECURITY.md`](SECURITY.md), which also lists the supported versions and
-what is in scope. Known issues and remediation status are tracked in
-[`intel/cybersec.md`](intel/cybersec.md).
+what is in scope. Reported vulnerabilities are disclosed as GitHub security
+advisories once fixed (see [Known issues](SECURITY.md#known-issues)).
 
 ## Releases
 

@@ -111,6 +111,7 @@ in the README for the commands.
 
 ## Known issues
 
-Known security issues and their remediation status are tracked in
-[`intel/cybersec.md`](intel/cybersec.md). A privately reported issue is added
-there when its advisory is published.
+Reported vulnerabilities are disclosed as GitHub security advisories when a
+fixed release is available (see [What to expect](#what-to-expect)). Published
+advisories are listed at
+<https://github.com/jabbott-iii/Salus/security/advisories>.

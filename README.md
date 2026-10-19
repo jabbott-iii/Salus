@@ -292,11 +292,12 @@ Flags for `check run`:
   `C:\` or `D:\data`; the default `/` means the root of the current drive.
 - `--kube-context` — kubeconfig context for `kubernetes-status` and
   `kubernetes-pods` (defaults to kubectl's current context). A name that
-  starts with `-` or contains control characters fails the check without
-  running `kubectl`.
+  starts with `-`, contains control characters, is not valid UTF-8, or is
+  longer than 253 bytes fails the check without running `kubectl`.
 - `--kube-namespace` — namespace for `kubernetes-pods` (defaults to the
-  context's namespace). It must be a valid namespace name (lowercase letters,
-  digits, and `-`); anything else fails the check without running `kubectl`.
+  context's namespace). It must be a valid namespace name: at most 63
+  lowercase letters, digits, and `-`, starting and ending with a letter or
+  digit. Anything else fails the check without running `kubectl`.
 - `--cert` — certificate file for `cert-expiry` (PEM, possibly with a chain or
   a private key in the same file, or a single DER certificate). Repeat the
   flag for several files; each gets its own result.
@@ -359,14 +360,14 @@ What each check reports:
 
 | Check | PASS | WARN | FAIL |
 |---|---|---|---|
-| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs, and every Windows volume) | At or above the WARN threshold; not Linux, macOS, or Windows; on Windows, CPU usage unknown; on Linux, memory usage unknown (`/proc/meminfo` without `MemTotal` or `MemAvailable`) | At or above the FAIL threshold; data unreadable or path missing |
+| `disk-space`, `disk-inodes`, `memory`, `cpu-load` | Below the WARN threshold; for `disk-inodes`, also a filesystem that reports no inode count (such as btrfs, and every Windows volume) | At or above the WARN threshold; not Linux, macOS, or Windows; on Windows, CPU usage unknown; on Linux, memory usage unknown (`/proc/meminfo` without `MemTotal` or `MemAvailable`, or with `MemTotal` 0) | At or above the FAIL threshold; data unreadable or path missing |
 | `docker-status` | Daemon reachable, no unhealthy or restarting containers | Unhealthy or restarting containers; container list unavailable; no `docker` CLI | Daemon unreachable |
 | `kubernetes-status` | Cluster reachable and every node Ready without pressure, or listing nodes is forbidden | Some nodes NotReady; nodes reporting MemoryPressure, DiskPressure, or PIDPressure; readiness unknown; no `kubectl` CLI | Cluster unreachable (a Forbidden answer counts as reachable); no node Ready; invalid `--kube-context` |
 | `kubernetes-pods` | Every pod Ready (completed pods are ignored), no pods, or listing pods is forbidden | Pods in CrashLoopBackOff, Failed, or not Ready; pod list unavailable; no `kubectl` CLI | Invalid `--kube-namespace` or `--kube-context` |
 | `service-uptime` | Service active, or host uptime readable | Service activating or reloading; not Linux or no `systemctl`; host uptime unavailable | Service not active; invalid `--service` |
-| `systemd-failed` | No failed units | Failed units (up to five are named); systemd not running; not Linux or no `systemctl` | — |
+| `systemd-failed` | No failed units | Failed units (up to five are named); unit list unavailable; systemd not running; not Linux or no `systemctl` | — |
 | `time-sync` | System clock synchronized | Clock not synchronized; status unknown; systemd not running; not Linux or no `timedatectl` | — |
-| `cert-expiry` | Valid for at least `--cert-warn-days` more days | Expires within `--cert-warn-days` | Expired or not yet valid; file missing, unreadable, larger than 1 MiB, or without a certificate |
+| `cert-expiry` | Valid for at least `--cert-warn-days` more days | Expires within `--cert-warn-days` | Expired or not yet valid; file missing, unreadable, not a regular file, larger than 1 MiB, without a certificate, or with a certificate that cannot be parsed |
 | `misconfig` | No problems found | One or more of the problems below | — |
 
 Any check that does not finish within `--check-timeout`, or that
@@ -552,8 +553,9 @@ job id, that id must not be the most recent run.
 its PASS, WARN, and FAIL results, its status changes between consecutive runs
 that included it, and its latest status. A check is flagged as flapping when
 its status changed at least `--flap-threshold` times. `jobs stats --json`
-prints `since`, `runs`, and `checks` (objects with `key`, `target`, `runs`,
-`pass`, `warn`, `fail`, `changes`, `last_status`, and `flapping`).
+prints `since`, `runs`, and `checks` (objects with `key`, `target` when
+there is one, `runs`, `pass`, `warn`, `fail`, `changes`, `last_status`, and
+`flapping`).
 
 ### Exit codes
 
@@ -570,9 +572,11 @@ These codes match the Nagios plugin convention (`3` is UNKNOWN there). Any
 command exits with code `3` for invalid flags, arguments, or threshold values
 (including an unknown command or subcommand), an unknown check name in
 `--only`, a job that does not exist, a database error, or an `--output` file
-that cannot be written. `jobs diff --exit-code` exits `1` when results
-changed. Errors are written to stderr, so stdout carries only command output
-(for example, clean JSON with `--json`).
+that cannot be written. The exceptions are `salus help <topic>` and
+`salus completion <shell>`: an unknown topic or shell prints help on stdout
+and exits `0`. `jobs diff --exit-code` exits `1` when results changed. Errors
+are written to stderr, so stdout carries only command output (for example,
+clean JSON with `--json`).
 
 `check run` writes its report before it saves the run, so if saving fails
 (for example when another process holds the database lock for more than five
@@ -600,13 +604,13 @@ Default database location when `SALUS_DB_PATH` is not set:
 
 | Platform | Path |
 |---|---|
-| Linux and other Unix | `$XDG_DATA_HOME/salus/salus.db`, or `~/.local/share/salus/salus.db` when `XDG_DATA_HOME` is unset |
+| Linux and other Unix | `$XDG_DATA_HOME/salus/salus.db`, or `~/.local/share/salus/salus.db` when `XDG_DATA_HOME` is unset or not an absolute path |
 | macOS | `~/Library/Application Support/salus/salus.db` |
 | Windows | `%LOCALAPPDATA%\salus\salus.db` |
 
 Salus creates a new database file with mode `0600` and any missing parent
 directories with mode `0700`. The `misconfig` check warns if the database file
-is readable or writable by group or other users (on Linux and macOS).
+is accessible by group or other users (on Linux and macOS).
 
 Several Salus processes can use the same database at once, for example two
 cron entries that start in the same minute. A process waits up to five
@@ -653,7 +657,8 @@ Other changes:
 - JSON results can carry `target`, `value`, and `unit` fields, and a plain
   `check run` returns more results; existing checks keep their positions.
 - Results recorded by 1.0.2 have no target. `jobs diff` and `jobs stats` match
-  them to the new results when the old message names the target, so the first
+  them to the new results when the old message names the target and the check
+  has a single target (one `--disk-path` or `--service` value), so the first
   comparison after the upgrade does not report every disk or service result
   as removed and added.
 - The first command after the upgrade that opens the database adds three
@@ -671,7 +676,8 @@ Other changes:
   Commands run in their own process group there, so a command that tries to
   prompt on the terminal (for example ssh asking for a key passphrase for an
   `ssh://` `DOCKER_HOST`) is stopped and times out. A command that prints more
-  than 8 MiB of output fails its check.
+  than 8 MiB of output counts as failed: its check reports `WARN` or `FAIL`, as
+  for any other error of that command.
 - `SIGINT` and `SIGTERM` during `check run` end it with exit code `3`,
   without a report or a saved run (1.0.2 was killed by the signal).
 - On Linux, `memory` reports `WARN` ("memory usage unknown") when
@@ -803,7 +809,7 @@ pull request.
 ├── Dockerfile            Multi-stage container image (runs as UID 10001)
 ├── Makefile              Development targets and release tagging
 ├── .golangci.yml         Pinned golangci-lint linter set
-├── intel/                Maintainer documents: architecture, security, plans
+├── CLAUDE.md, .claude/   Maintainer guidance for Claude Code: rules, skills, permissions
 ├── CONTRIBUTING.md       Contribution workflow and validation
 ├── SECURITY.md           Supported versions and private vulnerability reporting
 └── LICENSE, NOTICE       Apache-2.0 license and third-party notices
