@@ -52,10 +52,13 @@ Run from the repository root.
 ## Layout
 
 - `main.go`: entry point. Holds `var version` (set by
-  `-ldflags "-X main.version=..."` in CD and the `Dockerfile`), opens the
-  database lazily, maps errors to exit codes. The only place that calls
-  `os.Exit`. `main_test.go` tests the whole CLI through `run`.
+  `-ldflags "-X main.version=..."` in CD and the `Dockerfile`) and exits
+  with the code `pkg.Main` returns. The only place that calls `os.Exit`.
 - `pkg/`: everything else, one package named `pkg`:
+  - `main.go`: `Main`, which runs the CLI for the binary and for programs
+    that embed Salus. Opens the database lazily and closes it, maps errors
+    and panics to exit codes. `main_test.go` tests the whole CLI through
+    `run` and `Main`.
   - `logic-cli.go`: Cobra commands and flag validation. `version.go`: root
     command with the version attached.
   - `health.go`: check keys, registry, per-target expansion, the runner,
@@ -97,6 +100,11 @@ in the same change:
 - Exported identifiers in `pkg`: the package moved out of `internal/` so
   another project can import it (commits `08faf9b` and `555b10c`), so treat
   exported names and signatures as API.
+- `Main(ctx, version, args) int`, which other programs call to run Salus
+  in-process, possibly several times: Salus code never calls `os.Exit`
+  (Cobra still can on a few edge paths: the Windows mousetrap and failed
+  writes in `help` and `__complete`), `Main` never reads `os.Args`, and no
+  flag value, database, or signal handler outlives a call.
 
 A change that can raise the exit code on a host that passed before, or that
 changes output scripts parse, also needs an "Upgrading from <version>" note

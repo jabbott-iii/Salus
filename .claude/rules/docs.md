@@ -24,7 +24,7 @@ sentence is a bug. Which file owns what is in the Documentation table in
   | Check keys and order | `AllCheckKeys` in `pkg/health.go` |
   | PASS/WARN/FAIL conditions | the check functions in `pkg/health*.go` |
   | `misconfig` rule IDs | `misconfigRules` in `pkg/health.go` |
-  | Exit codes | `ExitCode*` in `pkg/report.go`, `main.go` |
+  | Exit codes | `ExitCode*` in `pkg/report.go`, `pkg/main.go` |
   | Output formats | `pkg/report.go`, `pkg/report-formats.go`, golden tests |
   | Environment variables, database paths | `pkg/database-path.go`, `pkg/health-sshd.go` |
   | Go and golangci-lint versions | `go.mod`, `.github/workflows/ci.yml` |

@@ -151,7 +151,7 @@ func ExitCodeFor(status CheckStatus) int {
 
 // ExitStatusError reports a completed check run whose worst status maps to a
 // non-zero exit code. It is returned from a command so that the exit code
-// reaches main without os.Exit inside the command; it is not an operational
+// reaches Main without os.Exit inside the command; it is not an operational
 // error.
 type ExitStatusError struct {
 	Code int

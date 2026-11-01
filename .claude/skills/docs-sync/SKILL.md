@@ -56,7 +56,7 @@ Read the source of truth for each item in scope:
   `pkg/report.go`, `pkg/logic-cli.go`, and `pkg/scan-history.go`.
 - Nagios, Prometheus, and JUnit examples against `pkg/report-formats.go`
   and the golden tests in `pkg/report-formats_test.go`.
-- Exit code statements against `pkg/report.go` and `main.go`.
+- Exit code statements against `pkg/report.go` and `pkg/main.go`.
 - Install, release, attestation, and image-tag instructions against
   `.github/workflows/cd.yml`; container notes against `Dockerfile` and
   `.github/workflows/docker.yml`.

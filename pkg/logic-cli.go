@@ -49,7 +49,7 @@ func NewRootCmd(openDB DatabaseOpener) *cobra.Command {
 			"failed systemd units, time synchronization, certificate expiry, and common misconfigurations.",
 		// Cobra would print errors and usage through the output writer, which
 		// mixes them into stdout (and --json). The caller reports errors on
-		// stderr instead; see run in main.go.
+		// stderr instead; see runWith in pkg/main.go.
 		SilenceErrors: true,
 		SilenceUsage:  true,
 	}
@@ -255,7 +255,7 @@ func newCheckRunCmdWith(openDB DatabaseOpener, runChecks func(context.Context, [
 
 			if code != ExitCodePass {
 				// A WARN or FAIL result is not a usage problem, so Cobra must not
-				// print the error or the usage text; main maps it to the exit code.
+				// print the error or the usage text; Main maps it to the exit code.
 				cmd.SilenceErrors = true
 				cmd.SilenceUsage = true
 				return &ExitStatusError{Code: code}

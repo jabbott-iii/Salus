@@ -24,11 +24,14 @@ paths:
 - Commands write output through `cmd.OutOrStdout()`, never `os.Stdout`
   directly, and check and return the error of every write (tests use a
   failing writer to enforce this). Errors are returned, not printed;
-  `main.run` writes them to stderr.
-- Commands return `*ExitStatusError` for a non-zero result. Only `main`
-  calls `os.Exit`. The root command sets `SilenceErrors` and
-  `SilenceUsage`; Cobra must never print errors or usage itself, or they
-  land on stdout.
+  `runWith` in `pkg/main.go` writes them to stderr.
+- Commands return `*ExitStatusError` for a non-zero result. Only `main.go`
+  calls `os.Exit`; `pkg.Main` returns the code, because programs that embed
+  Salus call it more than once in one process. Keep commands free of
+  package-level state: flags bind to variables inside the command
+  constructors, and signal handlers stop before the command returns. The
+  root command sets `SilenceErrors` and `SilenceUsage`; Cobra must never
+  print errors or usage itself, or they land on stdout.
 - Group commands use `runGroup` so an unknown subcommand is an error (exit
   `3`), and leaf commands declare `Args`.
 - `check run` validates every flag (`validateLimits`, `ValidateCheckKeys`,

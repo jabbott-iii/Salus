@@ -16,9 +16,9 @@ so tests must be deterministic and must not depend on the host.
   - `parseMeminfo`, `parseLoadAverage`, and `parseUptime` with fixture data
     for `/proc` contents; `pkg/health-decode.go` functions for macOS and
     Windows data.
-  - `isolateMisconfigEnv` (package `pkg`) and `isolateHostEnv` (package
-    `main`) for anything that reads `HOME`, `PATH`, `KUBECONFIG`,
-    `DOCKER_HOST`, `SALUS_DB_PATH`, or `SALUS_SSHD_CONFIG`.
+  - `isolateMisconfigEnv` (`pkg/checks_test.go`) and `isolateHostEnv`
+    (`pkg/main_test.go`) for anything that reads `HOME`, `PATH`,
+    `KUBECONFIG`, `DOCKER_HOST`, `SALUS_DB_PATH`, or `SALUS_SSHD_CONFIG`.
   - `testCertDER` to generate certificates and `sshdFixture` to write sshd
     configuration trees.
   - `newTestDatabase` and `newSeededTestDatabase` for a file-backed database
@@ -44,7 +44,8 @@ so tests must be deterministic and must not depend on the host.
 - Commands are tested through `Execute()` with injected writers and
   arguments. `newCheckRunCmdWith` takes the function that runs the checks,
   so tests can assert the `CheckOptions` built from flags. Exit codes are
-  tested through `run` in `main_test.go`.
+  tested through `run` and `Main` in `pkg/main_test.go`; `mainOutput`
+  captures what `Main` writes to `os.Stdout` and `os.Stderr`.
 - Report formats have golden-output tests in `pkg/report-formats_test.go`.
   Change a golden string only when the output change itself was approved;
   never edit one to make a failing test pass.

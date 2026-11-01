@@ -238,7 +238,7 @@ func (d *Database) Conn() *gorm.DB {
 }
 
 // Close releases the underlying connection pool. Windows cannot delete the
-// database file while it is open, so tests and main must always call it.
+// database file while it is open, so tests and Main must always call it.
 func (d *Database) Close() error {
 	sqlDB, err := d.conn.DB()
 	if err != nil {

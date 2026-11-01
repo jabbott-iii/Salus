@@ -19,9 +19,10 @@ package pkg
 import "github.com/spf13/cobra"
 
 // NewVersionedRootCmd builds the Salus command tree and attaches the build
-// version, which makes Cobra provide the --version flag. The caller passes
-// main.version, which release builds set with
-// -ldflags "-X main.version=vX.Y.Z" (see .github/workflows/cd.yml).
+// version, which makes Cobra provide the --version flag. Main passes the
+// version it is given; the salus binary passes main.version, which release
+// builds set with -ldflags "-X main.version=vX.Y.Z" (see
+// .github/workflows/cd.yml).
 func NewVersionedRootCmd(openDB DatabaseOpener, version string) *cobra.Command {
 	root := NewRootCmd(openDB)
 	root.Version = version

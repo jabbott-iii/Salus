@@ -453,7 +453,7 @@ type checkResult struct {
 // the limit passes, runCheck reports FAIL and returns. Go cannot stop that
 // goroutine. The check's external commands are stopped through its
 // context, and anything still blocked ends when the process exits. A panic
-// in the check is raised again here, so main reports it as an internal
+// in the check is raised again here, so Main reports it as an internal
 // error (exit 3) rather than crashing from another goroutine.
 func runCheck(ctx context.Context, key string, o CheckOptions, target string) (CheckOutcome, error) {
 	start := time.Now()
